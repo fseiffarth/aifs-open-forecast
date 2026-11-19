@@ -165,9 +165,20 @@ fields, in +/- pairs. Amplitudes are about typical analysis errors (see the scri
   that is stored, even from a run in progress (at least 3), so cards can be re-rendered while the
   ensemble is still running. Use `--skip-forecast --date <cycle>` to render a specific cycle.
 - Be careful with the result. This is a simple initial-condition ensemble and not ECMWF's ENS
-  (no singular vectors, no ensemble of data assimilations, no model-error perturbations). It is
-  probably under-dispersive: the spread is too small and the 10-90 % bands too narrow,
-  especially early on. Probabilities are not calibrated.
+  (no singular vectors, no ensemble of data assimilations, no model-error perturbations).
+  Probabilities are not calibrated.
+- One check against ECMWF's AIFS ENS (open data, cycle 2026-11-19 06Z, Germany box mean):
+
+  | +240 h | ECMWF AIFS ENS | this ensemble |
+  |--------|----------------|---------------|
+  | 2 m temperature, ensemble mean | 4.75 °C | 4.57 °C |
+  | 2 m temperature, spread | 2.84 K | 3.04 K |
+  | sea-level pressure, spread | 10.2 hPa | 9.4 hPa |
+  | 500 hPa height, spread | 122 gpm | 125 gpm |
+
+  The spread is similar from about day 5 on. In that case, the deterministic forecast (the
+  control) was about 6 K colder than both ensemble means at day 10, so a control at the edge
+  of the band can be real. The first days and other cases are not verified.
 
 ## Keep it running automatically
 

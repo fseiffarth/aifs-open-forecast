@@ -12,9 +12,11 @@ initial conditions (an "initial-condition ensemble"):
 Perturbations are smooth random fields (~500 km correlation length) on the prognostic
 atmospheric variables, with amplitudes of roughly typical analysis errors (see AMPLITUDES).
 The same perturbation is added to both input times (t-6 h and t). Soil, snow and ocean-wave
-fields are not perturbed. This is a simple, transparent scheme. ECMWF's operational ENS uses
-singular vectors plus an ensemble of data assimilations, so expect this ensemble to be
-under-dispersive, i.e. too confident, especially in the first days.
+fields are not perturbed. This is a simple, transparent scheme; ECMWF's operational ENS uses
+singular vectors plus an ensemble of data assimilations. In one check against ECMWF's AIFS ENS
+(cycle 2026-11-19 06Z, Germany box), the spread was similar from about day 5 on (2 m temperature
+3.0 K vs 2.8 K at day 10) and the ensemble means agreed within 0.2 K; the first days and other
+cases are not verified, and the probabilities are not calibrated.
 
 The open-data input is downloaded and regridded once. All members run in one process with
 the model loaded once. Only the region of interest is stored (51 global GRIBs would be

@@ -962,7 +962,7 @@ def _render_ens_card(cid):
     else:
         ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=10)
     fig.text(0.98, 0.012, f"Generated {dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC  ·  simple initial-condition "
-             f"ensemble (not ECMWF ENS), probably under-dispersive  ·  grid: N320 (~31 km)", fontsize=8, ha="right",
+             f"ensemble (not ECMWF ENS), probabilities not calibrated  ·  grid: N320 (~31 km)", fontsize=8, ha="right",
              color="#999")
     fn = c["fnames"][(("ens", cid), None)]
     fig.savefig(c["outdir"] / fn, dpi=100)

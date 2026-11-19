@@ -66,8 +66,9 @@ how confident the forecast is. Without one, the cards look as before.
   ensemble mean with the 10-90 % band.
 
 A 10-90 % band is meant to hold the true weather about 8 times out of 10, if the ensemble is
-reliable. This one is not guaranteed to be: it is a simple initial-condition ensemble, so the
-bands are probably too narrow, especially in the first days, and it is not ECMWF's ENS. Treat
+reliable. This one is not guaranteed to be. It is a simple initial-condition ensemble, not
+ECMWF's ENS. In one check against ECMWF's AIFS ENS, its spread over Germany was similar from
+about day 5 on (see INSTRUCTION.MD), but other cases and the first days are not verified. Treat
 the percentages as relative confidence, not calibrated probabilities. The number of members
 used is printed in the subtitle.
 
