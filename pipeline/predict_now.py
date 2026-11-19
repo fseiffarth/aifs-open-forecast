@@ -939,8 +939,9 @@ def main() -> int:
     region = REGIONS[args.region]
     outdir = cycle_dir / "cards" / args.region
     outdir.mkdir(parents=True, exist_ok=True)
-    for old in outdir.glob("*.png"):
-        old.unlink()
+    if not args.only:  # full render: drop cards from older naming schemes; --only keeps the rest
+        for old in outdir.glob("*.png"):
+            old.unlink()
     t0 = time.time()
     log(f"reading {grib}")
     entries, geo, base = load_data(grib, region)

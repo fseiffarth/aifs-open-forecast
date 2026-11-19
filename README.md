@@ -10,18 +10,47 @@ ECMWF open data, and turn the forecast into weather cards. One command does both
 On a single RTX PRO 6000 (96 GB) the full 10-day forecast takes about **2 min 40 s**, and all
 131 cards take another 40 s.
 
-![Overview card](docs/example-overview.png)
-
-![2 m temperature card](docs/example-2m-temperature.png)
-
 ## What it does
 
 1. Finds the newest 00/06/12/18 UTC cycle on [ECMWF open data](https://www.ecmwf.int/en/forecasts/datasets/open-data).
+   On the first run it also downloads the model (~1 GB) from Hugging Face.
 2. Runs [`ecmwf/aifs-single-2.0`](https://huggingface.co/ecmwf/aifs-single-2.0) with
    [anemoi-inference](https://github.com/ecmwf/anemoi-inference) for 10 days in 6 h steps.
-   The output is GRIB on the native N320 grid.
-3. Renders one card per variable (surface, 13 pressure levels, waves, constants) for a region,
-   plus a per-city overview. An `index.html` gallery links them all.
+   The output is GRIB on the native N320 grid (~31 km).
+3. Renders weather cards for a region (Germany or Europe) and an `index.html` gallery that
+   links them all.
+
+## Weather cards
+
+A weather card is one PNG that shows a single forecast at a glance. Each run makes about
+130 of them, in two kinds.
+
+**Overview card.** One panel per city (the model grid point nearest to it), all on the same
+axes so cities can be compared directly. Times are local.
+
+![Overview card](docs/example-overview.png)
+
+- Red line: 2 m air temperature.
+- Blue bars: rain per 6 h, on the right-hand axis.
+- Grey strip on top: total cloud cover, darker means more cloud.
+- Arrows at the bottom: 10 m wind direction, with the speed in km/h below.
+- Headline: the period's maximum and minimum temperature and total rain.
+
+**Variable cards.** One card per model output: surface fields such as temperature, pressure,
+precipitation and wind, 14 pressure levels from 1000 to 10 hPa, ocean waves, and constant
+fields such as orography.
+
+![2 m temperature card](docs/example-2m-temperature.png)
+
+- Maps: the field over the region at regular times, once a day at the same hour for a 10-day
+  run. All maps share one colour scale (the bar below them).
+- Precipitation and other accumulated fields are shown as amounts per period (for example
+  daily totals), so no rain falls between two maps. A second card shows the running total.
+- Time series: the field at each city for every 6 h step.
+
+File names sort by group, for example `1-surface_2m-temperature.png` or
+`2-upper-air_temperature_0850hPa.png`. Cards are written to
+`forecasts/<cycle>/cards/<region>/`.
 
 Repeated runs skip cycles that are already finished, so `predict_now.sh` can run hourly from
 cron and always keep the newest forecast.
