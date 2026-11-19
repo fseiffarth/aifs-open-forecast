@@ -758,25 +758,31 @@ def render_overview():
              f"({region['tz']})  ·  nearest model grid point to each city", fontsize=11.5, color="#444", va="center")
     outer = fig.add_gridspec(2, 3, left=0.045, right=0.96, top=0.86, bottom=0.05, wspace=0.28, hspace=0.45)
     ncity = len(cities)
+    # shared axes for all cities so the panels can be compared at a glance
+    idxs = [cc["idx"] for cc in cities.values()]
+    all_t = t2["vals"][:, idxs] - 273.15
+    t_lo, t_hi = np.floor(all_t.min()) - 2, np.ceil(all_t.max()) + 2.5
+    has_rain = tp is not None and len(tp["step_list"]) > 1
+    rain_hi = max(2.5, (np.maximum(np.diff(tp["vals"][:, idxs], axis=0), 0) * 1000).max() * 2.2) if has_rain else 0
     for k, (cn, cc) in enumerate(cities.items()):
         sub = outer[k // 3, k % 3].subgridspec(3, 1, height_ratios=[0.9, 4.2, 1.5], hspace=0.08)
         axc, axm, axw = (fig.add_subplot(sub[i]) for i in range(3))
         i = cc["idx"]
         temp = t2["vals"][:, i] - 273.15
         axm.plot(xs, temp, color="#d62728", lw=2.4, marker="o", ms=4, zorder=5)
-        axm.fill_between(xs, temp, temp.min() - 2, color="#d62728", alpha=0.08)
-        axm.set_ylim(temp.min() - 2, temp.max() + 2.5)
+        axm.fill_between(xs, temp, t_lo, color="#d62728", alpha=0.08)
+        axm.set_ylim(t_lo, t_hi)
         axm.set_ylabel("°C", color="#d62728", fontsize=10)
         axm.tick_params(axis="y", colors="#d62728", labelsize=9)
         axm.grid(alpha=0.25)
         head = f"max {temp.max():.0f}°C / min {temp.min():.0f}°C"
-        if tp is not None and len(tp["step_list"]) > 1:
+        if has_rain:
             acc = np.maximum(np.diff(tp["vals"][:, i]), 0) * 1000
             xe = xs[1:]
             half = np.median(np.diff(xs)) * 0.42
             axp = axm.twinx()
             axp.bar(xe - np.median(np.diff(xs)) / 2, acc, width=half * 2, color="#1f77b4", alpha=0.75, zorder=2)
-            axp.set_ylim(0, max(2.5, acc.max() * 2.2))
+            axp.set_ylim(0, rain_hi)
             axp.set_ylabel("rain mm / 6 h", color="#1f77b4", fontsize=9)
             axp.tick_params(axis="y", colors="#1f77b4", labelsize=9)
             axm.set_zorder(axp.get_zorder() + 1)
