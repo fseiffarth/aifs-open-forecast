@@ -48,6 +48,29 @@ fields such as orography.
   daily totals), so no rain falls between two maps. A second card shows the running total.
 - Time series: the field at each city for every 6 h step.
 
+**Ensemble information.** When an ensemble exists for the cycle (see below), the cards also show
+how confident the forecast is. Without one, the cards look as before.
+
+- Overview: the red line is still the deterministic forecast. The dark red band is the range
+  between the 10th and 90th percentile of the ensemble, the light band the minimum to the
+  maximum. Thin whiskers on the rain bars show the 10-90 % range of the 6 h rain. The row of
+  numbers under each panel is the chance of rain: the share of members with at least 1 mm in
+  each 24 h window, counted from the initial time.
+- Variable cards: a translucent band in each city's colour around its line, the 10-90 %
+  range of the members. Accumulations are differenced per member first and the percentiles
+  taken afterwards.
+- Ensemble cards (`5-ensemble_*.png`): 2 m temperature, sea-level pressure, 10 m wind speed,
+  850 hPa temperature and 500 hPa geopotential height show the ensemble mean (top row) and its
+  spread, the standard deviation over the members (bottom row). The precipitation card shows
+  the probability of at least 1 mm and at least 10 mm in each 24 h. Time series show the
+  ensemble mean with the 10-90 % band.
+
+A 10-90 % band is meant to hold the true weather about 8 times out of 10, if the ensemble is
+reliable. This one is not guaranteed to be: it is a simple initial-condition ensemble, so the
+bands are probably too narrow, especially in the first days, and it is not ECMWF's ENS. Treat
+the percentages as relative confidence, not calibrated probabilities. The number of members
+used is printed in the subtitle.
+
 File names sort by group, for example `1-surface_2m-temperature.png` or
 `2-upper-air_temperature_0850hPa.png`. Cards are written to
 `forecasts/<cycle>/cards/<region>/`.

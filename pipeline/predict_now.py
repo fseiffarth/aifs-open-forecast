@@ -55,6 +55,7 @@ from matplotlib.collections import LineCollection  # noqa: E402
 
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ens_stats  # noqa: E402
 
 # --------------------------------------------------------------------------------------
 # Regions
@@ -268,7 +269,7 @@ def load_data(grib: Path, region: dict):
     for name, (clat, clon) in region["cities"].items():
         d, i = tree.query([clon * math.cos(math.radians(51)), clat])
         cities[name] = dict(idx=int(i), lat=clat, lon=clon, glat=float(slat[i]), glon=float(slon[i]))
-    geo = dict(W=W, gx=gx, gy=gy, shape=GX.shape, cities=cities)
+    geo = dict(W=W, gx=gx, gy=gy, shape=GX.shape, cities=cities, lat=slat, lon=slon)
     return entries, geo, base
 
 
@@ -424,7 +425,8 @@ def fmt_valid(t: dt.datetime) -> str:
     return f"{t:%a %d %b %H} UTC"
 
 
-GROUP_PREFIX = {"Surface": "1-surface", "Pressure levels": "2-upper-air", "Waves": "3-waves", "Constants": "4-constant"}
+GROUP_PREFIX = {"Surface": "1-surface", "Pressure levels": "2-upper-air", "Waves": "3-waves", "Constants": "4-constant",
+                "Ensemble": "5-ensemble"}
 
 
 def slugify(text: str) -> str:
@@ -514,6 +516,8 @@ def render_card(task):
     """Render one weather card. task = (key, variant). Returns (task, filename, error)."""
     key, variant = task
     try:
+        if key[0] == "ens":
+            return task, *_render_ens_card(key[1])
         return _render_card(key, variant)
     except Exception as exc:  # keep going; report at the end
         import traceback
@@ -537,9 +541,8 @@ def _series(entry, spec, variant):
     return d * spec["scale"], steps[:-1], steps[1:]
 
 
-def _render_card(key, variant):
-    c = CTX
-    entry = c["entries"][key]
+def resolve_spec(entry):
+    """Plot specification of a loaded GRIB entry (shared by the cards and the ensemble code)."""
     spec = spec_for(entry["param"], entry["levtype"], entry["mname"], entry["munits"])
     if entry["levtype"] == "pl":
         spec = dict(PL_SPECS.get(entry["param"], spec))
@@ -547,9 +550,111 @@ def _render_card(key, variant):
             spec = spec_for(entry["param"], "sfc", entry["mname"], entry["munits"])
     if entry["param"] in ("10si", "100si"):
         spec = dict(SPECS[entry["param"]])
-    constant = c["constant"](key)
     if entry["param"] == "z" and entry["levtype"] != "pl":
         spec = dict(SPECS["z"])
+    return spec
+
+
+# --------------------------------------------------------------------------------------
+# Ensemble statistics (members stored by ensemble.py; CTX["ens"] holds the raw members)
+# --------------------------------------------------------------------------------------
+def ens_block(ens, entries, entry, zero_start=False):
+    """Raw member values of a GRIB entry as (members, entry steps, points), or None if not in the ensemble.
+
+    Matched by anemoi name; steps are aligned to the entry's steps (the ensemble has no step 0:
+    NaN there, or 0 for accumulations). Derived wind speeds are computed per member from u and v.
+    """
+    uv = entry.get("uv")
+    if uv:
+        u, v = (ens_block(ens, entries, entries[k]) for k in uv)
+        return None if u is None or v is None else np.hypot(u, v)
+    i = ens["index"].get(ens_stats.anemoi_name(entry["param"], entry["levtype"], entry["level"]))
+    if i is None:
+        return None
+    return ens_stats.align_steps(ens["vals"][:, :, i, :], ens["steps"], entry["step_list"], zero_start)
+
+
+def ens_series(ens, entries, key, spec, variant):
+    """Per-member version of `_series`: (values (members, n, points), start steps, end steps) or None.
+
+    The per-period amounts / mean fluxes are formed for every member first; any percentile is
+    taken afterwards (never percentiles of accumulations that are differenced later).
+    """
+    entry = entries[key]
+    blk = ens_block(ens, entries, entry, zero_start=spec["kind"] in ("acc", "flux"))
+    if blk is None:
+        return None
+    nm, ns, npt = blk.shape
+    flat = np.moveaxis(blk, 0, 1).reshape(ns, nm * npt)
+    out, s0, s1 = _series(dict(vals=flat, step_list=entry["step_list"]), spec, variant)
+    return out.reshape(out.shape[0], nm, npt).swapaxes(0, 1).astype(np.float32), s0, s1
+
+
+def ens_band(ens, entries, key, variant):
+    """10/90 % percentiles, mean and std of one card's time series, same shape as the card's series."""
+    spec = resolve_spec(entries[key])
+    r = ens_series(ens, entries, key, spec, variant)
+    return None if r is None else ens_stats.band_stats(r[0])
+
+
+def add_band(ax, times, lo, hi, ser, color, alpha=0.18):
+    """Translucent 10-90 % ensemble band; where the ensemble has no value (step 0) it collapses to the line."""
+    lo = np.where(np.isfinite(lo), lo, ser)
+    hi = np.where(np.isfinite(hi), hi, ser)
+    ax.fill_between(times, lo, hi, color=color, alpha=alpha, lw=0, zorder=1)
+
+
+ENS_CARDS = [
+    dict(id="2t", key=("2t", "sfc", None), name="2 m temperature", file="2m-temperature"),
+    dict(id="msl", key=("msl", "sfc", None), name="Mean sea-level pressure", file="mean-sea-level-pressure"),
+    dict(id="10si", key=("10si", "sfc", None), name="10 m wind speed", file="10m-wind-speed"),
+    dict(id="tp", key=("tp", "sfc", None), name="Precipitation, probability of daily amounts",
+         file="precipitation-probability", precip=True),
+    dict(id="t850", key=("t", "pl", 850), name="Temperature at 850 hPa", file="temperature_0850hPa"),
+    dict(id="z500", key=("z", "pl", 500), name="Geopotential height at 500 hPa", file="geopotential-height_0500hPa"),
+]
+
+
+def build_ens_cards(ens, entries, log=lambda m: None):
+    """Ensemble-card data for the key variables, computed once (main process) and shared via CTX."""
+    out = {}
+    for cd in ENS_CARDS:
+        key = cd["key"]
+        if key not in entries:
+            continue
+        spec = resolve_spec(entries[key])
+        r = ens_series(ens, entries, key, spec, None)
+        if r is None:
+            log(f"ensemble card {cd['id']}: variable not in the ensemble, skipped")
+            continue
+        arr, s0, s1 = r
+        P = dict(cd, spec=spec, unit=spec["unit"])
+        if cd.get("precip"):
+            sums, a, b = ens_stats.period_sums(arr, s0, s1, 24)
+            if sums.shape[1] == 0:
+                log("ensemble card tp: lead time below 24 h, skipped")
+                continue
+            st = ens_stats.band_stats(sums)
+            P.update(rows=[dict(kind="prob", thr=t, data=ens_stats.exceedance_prob(sums, t) * 100) for t in (1, 10)],
+                     f0=a, f1=b, ts=dict(st, steps=b), ts_unit="mm per 24 h (ensemble mean)")
+        else:
+            valid = np.isfinite(arr).any(axis=(0, 2))
+            if valid.sum() < 2:
+                continue
+            arr, s0, s1 = arr[:, valid], s0[valid], s1[valid]
+            st = ens_stats.band_stats(arr)
+            fm, f0, f1, fidx = frame_plan(st["mean"], s0, s1, "inst", None)
+            P.update(rows=[dict(kind="mean", data=fm), dict(kind="spread", data=st["std"][fidx])],
+                     f0=f0, f1=f1, ts=dict(st, steps=s1), ts_unit=f"{spec['unit']} (ensemble mean)")
+        out[cd["id"]] = P
+    return out
+
+
+def _render_card(key, variant):
+    c = CTX
+    entry = c["entries"][key]
+    spec = resolve_spec(entry)
+    constant = c["constant"](key)
     region, geo = c["region"], c["geo"]
     bbox = region["bbox"]
     init: dt.datetime = c["init"]
@@ -699,12 +804,15 @@ def _render_card(key, variant):
                     fontsize=12, va="top")
     else:
         tx_times = [init + dt.timedelta(hours=int(s)) for s in st1]
+        band = c["ens_stats"].get((key, variant)) if c.get("ens") else None
         ax = fig.add_axes([0.065, 0.75 / FH, 0.80, ts_h / FH])
         drawn = 0
         for (cn, cc), col in zip(cities.items(), CITY_COLORS):
             ser = arr[:, cc["idx"]]
             if np.isfinite(ser).any():
-                ax.plot(tx_times, ser, "-o", color=col, lw=1.8, ms=3.5, label=cn)
+                if band is not None and band["p10"].shape == arr.shape:
+                    add_band(ax, tx_times, band["p10"][:, cc["idx"]], band["p90"][:, cc["idx"]], ser, col)
+                ax.plot(tx_times, ser, "-o", color=col, lw=1.8, ms=3.5, label=cn, zorder=3)
                 drawn += 1
         if not drawn:  # e.g. sea-only fields: no city is at sea -> regional statistics instead
             with np.errstate(all="ignore"):
@@ -719,6 +827,9 @@ def _render_card(key, variant):
         ax.tick_params(labelsize=9)
         if drawn:
             ax.set_title("Nearest grid point to each city", fontsize=11, loc="left", color="#333")
+            if band is not None and band["p10"].shape == arr.shape:
+                ax.set_title(f"shading: 10–90 % ensemble range ({c['ens']['n']} members)", fontsize=9.5,
+                             loc="right", color="#666")
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         if spec.get("kmh"):
@@ -733,6 +844,130 @@ def _render_card(key, variant):
     fig.savefig(c["outdir"] / fn, dpi=100)
     plt.close(fig)
     return (key, variant), fn, None
+
+
+def _render_ens_card(cid):
+    """Ensemble card: row 1 = ensemble mean (or probability), row 2 = spread (or second threshold), plus city panel."""
+    c = CTX
+    P = c["ens_cards"][cid]
+    geo, region, init, lines = c["geo"], c["region"], c["init"], c["lines"]
+    bbox, W, shape, cities = region["bbox"], geo["W"], geo["shape"], geo["cities"]
+    spec, rows, f0, f1, ts = P["spec"], P["rows"], P["f0"], P["f1"], P["ts"]
+    nm, unit, precip = c["ens"]["n"], P["unit"], bool(P.get("precip"))
+    n = len(f1)
+    cmap_b = lambda cm: plt.get_cmap(cm).copy()  # noqa: E731
+
+    grids = [[to_grid(r["data"][j], W, shape) for j in range(n)] for r in rows]
+    if precip:
+        norm = mcolors.Normalize(0, 100)
+        cm = cmap_b("YlGnBu")
+        scales = [dict(norm=norm, cmap=cm, ticks=np.arange(0, 101, 20), extend="neither",
+                       label="probability (%)")] * 2
+        row_lbl = [f"P(daily ≥ {r['thr']} mm), %" for r in rows]
+        single_bar = True
+    else:
+        norm, cm, ticks, ext = make_norm(spec, grids[0])
+        fin = np.concatenate([g[np.isfinite(g)] for g in grids[1]]) if n else np.array([0.0])
+        hi = float(np.percentile(fin, 99.5)) if fin.size else 1.0
+        sa, sb, st_ticks = nice_limits(0, max(hi, 1e-6), nbins=6)
+        scales = [dict(norm=norm, cmap=cm, ticks=ticks, extend=ext, label=f"ensemble mean ({unit})"),
+                  dict(norm=mcolors.Normalize(sa, sb), cmap=cmap_b("magma_r"), ticks=st_ticks, extend="max",
+                       label=f"ensemble spread: standard deviation ({unit})")]
+        row_lbl = ["ensemble mean", "spread (std. dev.)"]
+        single_bar = False
+
+    FW, FH = 16.0, 11.5
+    fig = plt.figure(figsize=(FW, FH), dpi=100, facecolor="white")
+    title_h, ts_h = 1.0, 2.0
+    cbar_y = 0.5 + ts_h + 1.15
+    maps_bottom = cbar_y + 0.65 + (0.3 if spec.get("kmh") and not precip else 0)
+    maps_h = FH - title_h - 0.5 - maps_bottom
+    fig.text(0.02, 1 - 0.35 / FH, f"Ensemble: {P['name']}", fontsize=23, fontweight="bold", va="center",
+             color="#14213d")
+    sub = (f"Initial time {init:%a %Y-%m-%d %H} UTC   ·   valid {fmt_valid(init + dt.timedelta(hours=int(f1.min())))} to "
+           f"{fmt_valid(init + dt.timedelta(hours=int(f1.max())))}   ·   {nm}-member ensemble "
+           f"(initial-condition perturbations)   ·   {region['title']}")
+    fig.text(0.02, 1 - 0.78 / FH, sub, fontsize=11.5, va="center", color="#444")
+    fig.text(0.98, 1 - 0.35 / FH, "AIFS Single v2.0", fontsize=11, ha="right", va="center", color="#888")
+
+    mw = min(0.96, max(0.35, n * 0.095))
+    left = (1 - mw) / 2
+    top = 1 - (title_h + 0.5) / FH
+    gs = fig.add_gridspec(2, n, left=left, right=left + mw, top=top, bottom=top - maps_h / FH, wspace=0.06,
+                          hspace=0.12)
+    ims = [None, None]
+    for r in range(2):
+        sc = scales[r]
+        for j in range(n):
+            ax = fig.add_subplot(gs[r, j])
+            gm = np.ma.masked_invalid(grids[r][j])
+            if precip:
+                gm = np.ma.masked_less(gm, 1.0)
+            ims[r] = ax.imshow(gm, origin="lower", extent=(geo["gx"][0], geo["gx"][-1], geo["gy"][0], geo["gy"][-1]),
+                               cmap=sc["cmap"], norm=sc["norm"], interpolation="bilinear", zorder=2)
+            if r == 0 and not precip and spec.get("contour"):
+                g, cstep = grids[0][j], spec["contour"]
+                fin = g[np.isfinite(g)]
+                if fin.size:
+                    lv = (np.arange(math.floor(fin.min() / cstep) * cstep, fin.max() + cstep, cstep) if cstep > 0
+                          else ticker.MaxNLocator(nbins=14).tick_values(fin.min(), fin.max()))
+                    if len(lv) > 1:
+                        ax.contour(geo["gx"], geo["gy"], g, levels=lv, colors="k", linewidths=0.35, alpha=0.6, zorder=3)
+            setup_map(ax, bbox, lines, cities, labels=(r == 0 and j == 0))
+            if j == 0:
+                ax.set_ylabel(row_lbl[r], fontsize=10.5, labelpad=6)
+            if r == 0:
+                a = init + dt.timedelta(hours=int(f0[j]))
+                b = init + dt.timedelta(hours=int(f1[j]))
+                ttl = (f"{a:%d %b %H} UTC –\n{b:%d %b %H} UTC\n+{int(f0[j])} to +{int(f1[j])} h" if precip
+                       else f"{fmt_valid(b)}\n+{int(f1[j])} h")
+                ax.set_title(ttl, fontsize=8.5 if n > 5 else 9.5, pad=3, linespacing=1.15)
+    # colourbars
+    if single_bar:
+        pos = [[0.25, cbar_y / FH, 0.5, 0.17 / FH]]
+    else:
+        pos = [[0.07, cbar_y / FH, 0.38, 0.17 / FH], [0.55, cbar_y / FH, 0.38, 0.17 / FH]]
+    for k, ps in enumerate(pos):
+        sc = scales[k]
+        cb = fig.colorbar(ims[k], cax=fig.add_axes(ps), orientation="horizontal", extend=sc["extend"],
+                          ticks=list(sc["ticks"]))
+        cb.set_label(sc["label"], fontsize=11)
+        cb.ax.tick_params(labelsize=9.5)
+        if spec.get("kmh") and not precip:
+            sec = cb.ax.secondary_xaxis("top", functions=(lambda x: x * 3.6, lambda x: x / 3.6))
+            sec.set_xlabel("km/h", fontsize=9.5, labelpad=2)
+            sec.tick_params(labelsize=9)
+
+    # city panel: ensemble mean, 10-90 % band
+    ax = fig.add_axes([0.065, 0.75 / FH, 0.80, ts_h / FH])
+    tx = [init + dt.timedelta(hours=int(s)) for s in ts["steps"]]
+    for (cn, cc), col in zip(cities.items(), CITY_COLORS):
+        m = ts["mean"][:, cc["idx"]]
+        if np.isfinite(m).any():
+            add_band(ax, tx, ts["p10"][:, cc["idx"]], ts["p90"][:, cc["idx"]], m, col, 0.2)
+            ax.plot(tx, m, "-o", color=col, lw=1.8, ms=3.5, label=cn, zorder=3)
+    ax.grid(alpha=0.3)
+    ax.set_ylabel(P["ts_unit"], fontsize=10)
+    ax.set_title("Nearest grid point to each city: ensemble mean", fontsize=11, loc="left", color="#333")
+    ax.set_title(f"shading: 10–90 % ensemble range ({nm} members)", fontsize=9.5, loc="right", color="#666")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b\n%H UTC"))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+    ax.tick_params(labelsize=9)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    if spec.get("kmh") and not precip:
+        sec = ax.secondary_yaxis("right", functions=(lambda x: x * 3.6, lambda x: x / 3.6))
+        sec.set_ylabel("km/h", fontsize=10)
+        ax.legend(loc="center left", bbox_to_anchor=(1.07, 0.5), frameon=False, fontsize=10)
+    else:
+        ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=10)
+    fig.text(0.98, 0.012, f"Generated {dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC  ·  simple initial-condition "
+             f"ensemble (not ECMWF ENS), probably under-dispersive  ·  grid: N320 (~31 km)", fontsize=8, ha="right",
+             color="#999")
+    fn = c["fnames"][(("ens", cid), None)]
+    fig.savefig(c["outdir"] / fn, dpi=100)
+    plt.close(fig)
+    return fn, None
 
 
 # --------------------------------------------------------------------------------------
@@ -751,26 +986,62 @@ def render_overview():
     steps = t2["step_list"]
     times = [(init.replace(tzinfo=dt.timezone.utc) + dt.timedelta(hours=int(s))).astimezone(tz) for s in steps]
     xs = mdates.date2num(times)
-    fig = plt.figure(figsize=(16, 10), dpi=100, facecolor="white")
+    ens = c.get("ens")
+    fig = plt.figure(figsize=(16, 10.6 if ens else 10), dpi=100, facecolor="white")
     fig.text(0.02, 0.965, f"Weather forecast {region['title']}", fontsize=24, fontweight="bold", color="#14213d",
              va="center")
-    fig.text(0.02, 0.928, f"AIFS Single v2.0 forecast started {init:%a %d %b %Y, %H} UTC  ·  local time "
-             f"({region['tz']})  ·  nearest model grid point to each city", fontsize=11.5, color="#444", va="center")
-    outer = fig.add_gridspec(2, 3, left=0.045, right=0.96, top=0.86, bottom=0.05, wspace=0.28, hspace=0.45)
+    sub = (f"AIFS Single v2.0 forecast started {init:%a %d %b %Y, %H} UTC  ·  local time "
+           f"({region['tz']})  ·  nearest model grid point to each city")
+    if ens:
+        sub += f"  ·  {ens['n']}-member ensemble (initial-condition perturbations)"
+    fig.text(0.02, 0.928, sub, fontsize=11.5, color="#444", va="center")
+    outer = fig.add_gridspec(2, 3, left=0.045, right=0.96, top=0.86, bottom=0.075 if ens else 0.05, wspace=0.28, hspace=0.45)
     ncity = len(cities)
     # shared axes for all cities so the panels can be compared at a glance
     idxs = [cc["idx"] for cc in cities.values()]
     all_t = t2["vals"][:, idxs] - 273.15
-    t_lo, t_hi = np.floor(all_t.min()) - 2, np.ceil(all_t.max()) + 2.5
     has_rain = tp is not None and len(tp["step_list"]) > 1
+    # ensemble statistics at the city points (members first, percentiles afterwards)
+    et = er = ec = None
+    if ens:
+        b = ens_block(ens, E, t2)
+        if b is not None:
+            tb = b[:, :, idxs] - 273.15
+            p10, p90 = ens_stats.percentiles(tb)
+            et = dict(p10=p10, p90=p90, mn=tb.min(axis=0), mx=tb.max(axis=0))
+        if has_rain:
+            r = ens_series(ens, E, ("tp", "sfc", None), SPECS["tp"], None)
+            if r is not None:
+                per, s0, s1 = r[0][:, :, idxs], r[1], r[2]
+                p10, p90 = ens_stats.percentiles(per)
+                er = dict(p10=p10, p90=p90)
+                sums, wa, wb = ens_stats.period_sums(per, s0, s1, 24)
+                if sums.shape[1]:
+                    ec = dict(p=ens_stats.exceedance_prob(sums, 1.0) * 100, a=wa, b=wb)
+    lo_t, hi_t = all_t.min(), all_t.max()
+    if et is not None:
+        lo_t, hi_t = min(lo_t, np.nanmin(et["mn"])), max(hi_t, np.nanmax(et["mx"]))
+    t_lo, t_hi = np.floor(lo_t) - 2, np.ceil(hi_t) + 2.5
     rain_hi = max(2.5, (np.maximum(np.diff(tp["vals"][:, idxs], axis=0), 0) * 1000).max() * 2.2) if has_rain else 0
+    if er is not None:
+        rain_hi = max(rain_hi, float(np.nanmax(er["p90"])) * 2.2)
     for k, (cn, cc) in enumerate(cities.items()):
-        sub = outer[k // 3, k % 3].subgridspec(3, 1, height_ratios=[0.9, 4.2, 1.5], hspace=0.08)
-        axc, axm, axw = (fig.add_subplot(sub[i]) for i in range(3))
+        if ec is not None:
+            sub = outer[k // 3, k % 3].subgridspec(4, 1, height_ratios=[0.9, 4.2, 0.8, 1.5], hspace=0.08)
+            axc, axm, axr, axw = (fig.add_subplot(sub[j]) for j in range(4))
+        else:
+            sub = outer[k // 3, k % 3].subgridspec(3, 1, height_ratios=[0.9, 4.2, 1.5], hspace=0.08)
+            axc, axm, axw = (fig.add_subplot(sub[j]) for j in range(3))
+            axr = None
+        axes = [a for a in (axc, axm, axr, axw) if a is not None]
         i = cc["idx"]
         temp = t2["vals"][:, i] - 273.15
         axm.plot(xs, temp, color="#d62728", lw=2.4, marker="o", ms=4, zorder=5)
-        axm.fill_between(xs, temp, t_lo, color="#d62728", alpha=0.08)
+        if et is not None:
+            for lo, hi, al in ((et["mn"], et["mx"], 0.10), (et["p10"], et["p90"], 0.24)):
+                add_band(axm, xs, lo[:, k], hi[:, k], temp, "#d62728", al)
+        else:
+            axm.fill_between(xs, temp, t_lo, color="#d62728", alpha=0.08)
         axm.set_ylim(t_lo, t_hi)
         axm.set_ylabel("°C", color="#d62728", fontsize=10)
         axm.tick_params(axis="y", colors="#d62728", labelsize=9)
@@ -782,6 +1053,9 @@ def render_overview():
             half = np.median(np.diff(xs)) * 0.42
             axp = axm.twinx()
             axp.bar(xe - np.median(np.diff(xs)) / 2, acc, width=half * 2, color="#1f77b4", alpha=0.75, zorder=2)
+            if er is not None and er["p10"].shape[0] == len(acc):
+                axp.vlines(xe - np.median(np.diff(xs)) / 2, er["p10"][:, k], er["p90"][:, k], color="#0b2e6b", lw=1.1,
+                           zorder=3)
             axp.set_ylim(0, rain_hi)
             axp.set_ylabel("rain mm / 6 h", color="#1f77b4", fontsize=9)
             axp.tick_params(axis="y", colors="#1f77b4", labelsize=9)
@@ -805,6 +1079,17 @@ def render_overview():
                              color="white" if cv > 0.45 else "#333")
         axc.set_ylabel("cloud %", fontsize=8, rotation=0, ha="right", va="center")
         axc.set_yticks([])
+        # chance of rain: P(24 h amount >= 1 mm) in the ensemble
+        if axr is not None:
+            axr.set_ylim(0, 1)
+            for pr, wa, wb in zip(ec["p"][:, k], ec["a"], ec["b"]):
+                xc = mdates.date2num((init.replace(tzinfo=dt.timezone.utc)
+                                      + dt.timedelta(hours=float(wa + wb) / 2)).astimezone(tz))
+                axr.bar(xc, 1, width=(wb - wa) / 24 * 0.96, color=plt.cm.Blues(0.05 + 0.75 * pr / 100), lw=0)
+                axr.text(xc, 0.5, f"{pr:.0f}", ha="center", va="center", fontsize=7.5,
+                         color="white" if pr > 55 else "#223")
+            axr.set_ylabel("rain ≥ 1 mm\nper 24 h, %", fontsize=7.5, rotation=0, ha="right", va="center")
+            axr.set_yticks([])
         # wind strip
         axw.set_ylim(-1, 1)
         if u10 is not None and v10 is not None:
@@ -819,29 +1104,36 @@ def render_overview():
                 axw.text(x, -0.55, f"{s * 3.6:.0f}", ha="center", va="center", fontsize=7.5, color="#2a4d69")
         axw.set_ylabel("wind km/h", fontsize=8, rotation=0, ha="right", va="center")
         axw.set_yticks([])
-        for a in (axc, axm, axw):
+        for a in axes:
             a.set_xlim(xs[0] - 0.12, xs[-1] + 0.12)
             for s in ("top",):
                 a.spines[s].set_visible(False)
             # local midnights
-        for a in (axc, axm, axw):
+        for a in axes:
             a.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 12 if len(xs) > 12 else 6), tz=tz) if len(xs) <= 20
                                       else mdates.DayLocator(interval=2 if len(xs) > 28 else 1, tz=tz))
             a.xaxis.set_major_formatter(mdates.DateFormatter("%a %H", tz=tz) if len(xs) <= 20
                                         else mdates.DateFormatter("%a %d", tz=tz))
         axc.tick_params(labelbottom=False, bottom=False)
         axm.tick_params(labelbottom=False)
+        if axr is not None:
+            axr.tick_params(labelbottom=False, bottom=False)
         axw.tick_params(labelsize=8)
         for lab in axw.get_xticklabels():
             lab.set_rotation(0)
         d0 = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
         d = d0 + dt.timedelta(days=1)
         while d < times[-1]:
-            for a in (axc, axm, axw):
+            for a in axes:
                 a.axvline(mdates.date2num(d), color="#999", lw=0.8, ls=":")
             d += dt.timedelta(days=1)
-    fig.text(0.98, 0.012, "Red line: air temperature (2 m)  ·  blue bars: rain per 6 h  ·  grey strip: total cloud cover %  ·  "
-             "arrows: wind direction (10 m), number = km/h", fontsize=9, ha="right", color="#777")
+    note = ("Red line: air temperature (2 m)  ·  blue bars: rain per 6 h  ·  grey strip: total cloud cover %  ·  "
+            "arrows: wind direction (10 m), number = km/h")
+    if ens:
+        fig.text(0.98, 0.027, "Dark red band: ensemble 10–90 %, light band: ensemble min–max  ·  dark whiskers on the bars: "
+                 "10–90 % of the 6 h rain  ·  bottom row: ensemble chance of ≥ 1 mm rain in each 24 h from the initial time (%)",
+                 fontsize=9, ha="right", color="#777")
+    fig.text(0.98, 0.012, note, fontsize=9, ha="right", color="#777")
     fn = "0-overview.png"
     fig.savefig(c["outdir"] / fn, dpi=100)
     plt.close(fig)
@@ -852,7 +1144,7 @@ def render_overview():
 # Index page
 # --------------------------------------------------------------------------------------
 def write_index(outdir, region, init, items, skipped, lead):
-    groups = ["Overview", "Surface", "Pressure levels", "Waves", "Constants"]
+    groups = ["Overview", "Ensemble", "Surface", "Pressure levels", "Waves", "Constants"]
     h = [f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AIFS weather cards {html.escape(region['title'])} {init:%Y-%m-%d %H}Z</title><style>
 body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#14213d}}
@@ -906,6 +1198,12 @@ def main() -> int:
     p.add_argument("--skip-forecast", action="store_true", help="do not run the forecast; render the newest finished cycle")
     p.add_argument("--grib", help="render this GRIB file (implies --skip-forecast); cards go next to it")
     p.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1), help="parallel card renderers")
+    p.add_argument("--ensemble", default="auto", choices=["auto", "off"],
+                   help="auto: add ensemble bands/probabilities when forecasts/<cycle>/ensemble/<region>/ has members "
+                   "(default); off: render the deterministic forecast only")
+    p.add_argument("--ensemble-members", type=int, default=0, metavar="N",
+                   help="after the forecast, run pipeline/ensemble.py with N perturbed members (even; 50 = 51 members, "
+                   "about 45 min for 10 days on a large GPU). Default 0: do not run it, but use stored members")
     p.add_argument("--only", help="comma-separated params to render (e.g. 2t,tp,t_850), for debugging")
     args = p.parse_args()
     out_root = Path(args.output_root)
@@ -927,6 +1225,18 @@ def main() -> int:
             if rc != 0:
                 log(f"forecast failed (exit {rc}); not rendering")
                 return rc
+        if args.ensemble_members > 0:
+            cmd = [sys.executable, str(Path(__file__).parent / "ensemble.py"), "--members", str(args.ensemble_members),
+                   "--lead-time", args.lead_time, "--region", args.region, "--device", args.device,
+                   "--source", args.source, "--output-root", str(out_root)]
+            if args.date:
+                cmd += ["--date", args.date]
+            if args.force:
+                cmd.append("--force")
+            log("running ensemble: " + " ".join(cmd[1:]))
+            rc = subprocess.call(cmd)
+            if rc != 0:
+                log(f"ensemble failed (exit {rc}); rendering with the members that exist")
         cycle_dir = find_cycle(out_root, args.date)
         if cycle_dir is None or not (cycle_dir / "DONE").exists():
             log("no finished forecast cycle found" + (" (another run may still be in progress)" if not args.skip_forecast else ""))
@@ -951,8 +1261,18 @@ def main() -> int:
         f"steps up to +{max(int(e['step_list'].max()) for e in entries.values())} h")
     lines = load_lines(region["bbox"])
 
-    CTX.update(entries=entries, geo=geo, region=region, init=init, outdir=outdir, lines=lines,
-               constant=lambda k: len(entries[k]["step_list"]) == 1 and nsteps_all > 1)
+    ens = None
+    if args.ensemble == "auto" and (cycle_dir / "ensemble" / args.region).is_dir():
+        te = time.time()
+        ens = ens_stats.load_ensemble(cycle_dir / "ensemble" / args.region, geo["lat"], geo["lon"], log)
+        if ens:
+            ens["n"] = len(ens["members"])
+            done = (ens["dir"] / "DONE").exists()
+            log(f"ensemble: {ens['n']} members used" + ("" if done else f" (run not finished: {ens['expected']} planned)")
+                + f", {len(ens['names'])} variables, steps +{int(ens['steps'][0])}..+{int(ens['steps'][-1])} h, "
+                f"loaded in {time.time() - te:.1f}s")
+    CTX.update(entries=entries, geo=geo, region=region, init=init, outdir=outdir, lines=lines, ens=ens, ens_stats={},
+               ens_cards={}, constant=lambda k: len(entries[k]["step_list"]) == 1 and nsteps_all > 1)
 
     tasks, meta, fnames, used_names = [], {}, {}, set()
     CTX["fnames"] = fnames
@@ -995,8 +1315,29 @@ def main() -> int:
     def sort_key(t):
         m = meta[t]
         pr = SURFACE_ORDER.index(m["param"]) if m["param"] in SURFACE_ORDER else 999
-        return (["Surface", "Pressure levels", "Waves", "Constants"].index(m["group"]), pr, m["param"], m["level"], t[1] or "")
+        return (["Surface", "Pressure levels", "Waves", "Constants", "Ensemble"].index(m["group"]), pr, m["param"], m["level"], t[1] or "")
 
+    if ens:
+        te = time.time()
+        for t in tasks:  # bands for every card with ensemble data (computed once, shared with the workers)
+            if meta[t]["group"] != "Constants":
+                st = ens_band(ens, entries, t[0], t[1])
+                if st is not None:
+                    CTX["ens_stats"][t] = st
+        log(f"ensemble bands for {len(CTX['ens_stats'])} of {len(tasks)} cards in {time.time() - te:.1f}s")
+        missing = sorted({meta[t]["param"] + (f"_{meta[t]['level']}" if meta[t]["level"] else "") for t in tasks
+                          if t not in CTX["ens_stats"] and meta[t]["group"] != "Constants"})
+        if missing:
+            log("no ensemble data for: " + ", ".join(missing))
+        CTX["ens_cards"] = build_ens_cards(ens, entries, log)
+        for cid, P in CTX["ens_cards"].items():
+            if only and not ({"ens", "ensemble", cid} & only):
+                continue
+            t = (("ens", cid), None)
+            tasks.append(t)
+            fnames[t] = f"{GROUP_PREFIX['Ensemble']}_{P['file']}.png"
+            meta[t] = dict(group="Ensemble", title=P["name"], level=0, param=cid,
+                           unit="P(daily ≥ 1 mm, ≥ 10 mm)" if P.get("precip") else "mean and spread")
     tasks.sort(key=sort_key)
 
     t1 = time.time()
@@ -1021,7 +1362,7 @@ def main() -> int:
             skipped.append(f"{m['title']}: no valid data in region")
         else:
             failed.append((m["title"], err))
-    gorder = ["Overview", "Surface", "Pressure levels", "Waves", "Constants"]
+    gorder = ["Overview", "Ensemble", "Surface", "Pressure levels", "Waves", "Constants"]
     lead = max(int(e["step_list"].max()) for e in entries.values())
     write_index(outdir, region, init, items, skipped, lead)
     counts = {g: sum(1 for i in items if i["group"] == g) for g in gorder}

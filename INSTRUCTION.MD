@@ -109,6 +109,13 @@ Options:
 - `--device`, `--force`, `--date`, `--source`, `--output-root`, `--workers`.
 - `--only`: render a subset, using GRIB codes such as `2t,tp,t_850hPa`.
 
+- `--ensemble {auto,off}`: `auto` (default) adds ensemble bands, probabilities and the
+  `5-ensemble_*` cards when `forecasts/<cycle>/ensemble/<region>/` has at least 3 members;
+  `off` renders the deterministic forecast only. The number of members used is logged and
+  shown on the cards.
+- `--ensemble-members N`: after the forecast, run `pipeline/ensemble.py --members N` (default
+  0 = do not run it). `N` must be even; 50 gives 51 members.
+
 Output goes to `forecasts/<cycle>/cards/<region>/`. Open `index.html` there. File names
 sort in the same order as the gallery:
 
@@ -120,6 +127,7 @@ sort in the same order as the gallery:
 | `2-upper-air_<name>_<llll>hPa.png` | Pressure levels, e.g. `2-upper-air_temperature_0850hPa.png`, `2-upper-air_geopotential-height_0500hPa.png` |
 | `3-waves_<name>.png` | Ocean waves, e.g. `3-waves_wave-height.png`, `3-waves_wave-height-10-12s.png` |
 | `4-constant_<name>.png` | Constant fields: `elevation`, `land-sea-mask`, `sea-depth`, … |
+| `5-ensemble_<name>.png` | Ensemble mean and spread (or probabilities for precipitation), only with an ensemble |
 
 What the cards contain:
 
@@ -133,6 +141,33 @@ What the cards contain:
 - Radiation is shown as mean W/m² per interval.
 - Fields with no data in the region (e.g. waves over land) are listed as skipped in `index.html`.
 - Natural Earth shapes are downloaded on first use into `.cache/cartopy`.
+
+## Ensemble forecast (forecast confidence)
+
+AIFS Single is deterministic. `pipeline/ensemble.py` estimates forecast uncertainty by running
+the same model 51 times from slightly different initial conditions: member 0 is the unperturbed
+control, members 1-50 add smooth random perturbations (about 500 km scale) to the atmospheric
+fields, in +/- pairs. Amplitudes are about typical analysis errors (see the script header).
+
+```bash
+.venv/bin/python pipeline/ensemble.py                  # latest cycle, 50 + 1 members, 240 h, Germany
+.venv/bin/python pipeline/ensemble.py --members 10     # fewer members (must be even)
+./predict_now.sh --ensemble-members 50                 # forecast, then ensemble, then cards
+```
+
+- Runtime: about 50 s per member for 10 days on the RTX PRO 6000, so about 45 min for all 51.
+  Do not run it while another forecast uses the GPU. A stopped run resumes and skips members
+  that are already stored; `--force` starts again.
+- Storage: only the region is kept, `forecasts/<cycle>/ensemble/<region>/member_NNN.npz`
+  (about 19 MB per member for Germany, roughly 1 GB in total), plus `meta.json` and `DONE`.
+  The full global output of 51 members would be about 117 GB.
+- Card integration is automatic: `predict_now.sh` (with `--ensemble auto`) uses every member
+  that is stored, even from a run in progress (at least 3), so cards can be re-rendered while the
+  ensemble is still running. Use `--skip-forecast --date <cycle>` to render a specific cycle.
+- Be careful with the result. This is a simple initial-condition ensemble and not ECMWF's ENS
+  (no singular vectors, no ensemble of data assimilations, no model-error perturbations). It is
+  probably under-dispersive: the spread is too small and the 10-90 % bands too narrow,
+  especially early on. Probabilities are not calibrated.
 
 ## Keep it running automatically
 
