@@ -182,7 +182,7 @@ EOF
   timings above use it. To use the real flash-attn on Ampere, Ada or Hopper, install the wheel
   listed in `models/aifs-single-2.0/pyproject.toml`.
 - **Memory knobs:** `ANEMOI_INFERENCE_NUM_CHUNKS` (default 16 here) chunks the graph mappers.
-  `AIFS_ATTN_BLOCK` (default 2048) sets the query block size of the attention shim.
+  `ATTN_SHIM_QUERY_CHUNK` (default 2048) sets how many queries the attention shim processes at once.
 
 ## Compatibility fixes
 

@@ -33,7 +33,7 @@ def reference(q, k, v, scale=None, causal=False, window=(-1, -1), softcap=0.0, a
 @pytest.fixture(autouse=True)
 def small_blocks(monkeypatch):
     # several blocks per sequence so block boundaries are exercised
-    monkeypatch.setattr(fai, "_BLOCK", 7)
+    monkeypatch.setattr(fai, "_QUERY_CHUNK", 7)
 
 
 def qkv(sq=40, sk=None, b=2, h=3, d=8, seed=0):

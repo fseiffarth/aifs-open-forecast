@@ -76,6 +76,22 @@ packages. The fixes are:
 
 Details are in [INSTRUCTION.MD](INSTRUCTION.MD#compatibility-fixes).
 
+## Related projects
+
+Others have run AIFS from open data and hit the same problems:
+
+- [ecmwf-lab/ai-models](https://github.com/ecmwf-lab/ai-models): ECMWF's tool for running
+  AIFS and other ML weather models from open data.
+- [huggingface/AIFS-single-2.0-on-all-GPUs](https://github.com/huggingface/AIFS-single-2.0-on-all-GPUs):
+  a tutorial that replaces flash-attn with PyTorch's built-in attention and plots maps.
+- [MichelFaloughi/scmp-5990](https://github.com/MichelFaloughi/scmp-5990): runs AIFS on a
+  laptop CPU with similar fixes (orography key, banded attention), and trains a correction
+  for tropical-cyclone intensity.
+
+This repo focuses on unattended, repeated runs (newest cycle, skip finished ones, cron) and
+on readable regional weather cards. Its attention stand-in is tested against dense
+attention (`tests/`).
+
 ## Licence and attribution
 
 The code in this repository is licensed under the [Apache License 2.0](LICENSE).

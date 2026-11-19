@@ -5,7 +5,7 @@ import os
 
 import torch
 
-_BLOCK = int(os.environ.get("AIFS_ATTN_BLOCK", "2048"))
+_QUERY_CHUNK = int(os.environ.get("ATTN_SHIM_QUERY_CHUNK", "2048"))
 
 
 def flash_attn_func(
@@ -43,8 +43,8 @@ def flash_attn_func(
         slopes = slopes.view(1, -1, 1, 1) if slopes.dim() == 1 else slopes.view(slopes.shape[0], -1, 1, 1)
 
     out = torch.empty_like(q)
-    for s in range(0, sq, _BLOCK):
-        e = min(s + _BLOCK, sq)
+    for s in range(0, sq, _QUERY_CHUNK):
+        e = min(s + _QUERY_CHUNK, sq)
         k0 = 0 if left < 0 else max(0, s + offset - left)
         k1 = sk if right < 0 else min(sk, e - 1 + offset + right + 1)
         if causal:
