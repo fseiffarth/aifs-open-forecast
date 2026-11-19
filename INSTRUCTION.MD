@@ -15,7 +15,7 @@ All commands below are run from the repository root.
 | `pipeline/run_forecast.sh` | Wrapper that uses the venv and appends to `forecasts/pipeline.log` | yes |
 | `pipeline/predict_now.py`, `predict_now.sh` | Forecast + weather cards | yes |
 | `pipeline/compat/` | Compatibility fixes, see [Compatibility fixes](#compatibility-fixes) | yes |
-| `models/aifs-single-2.0/` | Model checkpoint and config from Hugging Face | no (download, see Setup) |
+| `models/aifs-single-2.0/` | Model checkpoint and config from Hugging Face | no (downloaded on first run) |
 | `anemoi-core/` | Clone of `ecmwf/anemoi-core` at tag `models-0.9.3` | no (clone, see Setup) |
 | `.venv/` | Python 3.12 environment | no |
 | `.sysdeps/` | `libgfortran.so.5` from conda-forge (only if the system lacks it) | no |
@@ -26,7 +26,8 @@ All commands below are run from the repository root.
 ## Setup (once per machine or checkout)
 
 ```bash
-# 1. Model (≈ 1 GB, CC BY 4.0)
+# 1. Model (≈ 1 GB, CC BY 4.0): optional. The first forecast run downloads it into
+#    models/aifs-single-2.0/ and verifies the checksum. To fetch it ahead of time:
 uvx --from huggingface_hub hf download ecmwf/aifs-single-2.0 --local-dir models/aifs-single-2.0
 sha256sum models/aifs-single-2.0/aifs-single-mse-2.0.ckpt
 # expected: 4e23ef40157b9e99b5228e5dcffb0d0d5a789f019ffcc89033ee9caae5d7ff6b
