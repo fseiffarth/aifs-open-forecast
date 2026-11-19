@@ -115,12 +115,16 @@ sort in the same order as the gallery:
 |------|---------|
 | `0-overview.png` | Per-city forecast (temperature, rain, cloud cover, wind; local time) |
 | `1-surface_<name>.png` | Surface and soil fields, e.g. `1-surface_2m-temperature.png`, `1-surface_10m-wind-speed.png`, `1-surface_cloud-cover-low.png`, `1-surface_solar-radiation-down.png` |
-| `1-surface_<name>_per-6h.png` / `_accumulated-total.png` | Accumulations, e.g. `1-surface_precipitation_per-6h.png`, `1-surface_snowfall_accumulated-total.png` |
+| `1-surface_<name>_amounts.png` / `_accumulated-total.png` | Accumulations, e.g. `1-surface_precipitation_amounts.png` (6-hourly maps for short forecasts, daily totals for long ones), `1-surface_snowfall_accumulated-total.png` |
 | `2-upper-air_<name>_<llll>hPa.png` | Pressure levels, e.g. `2-upper-air_temperature_0850hPa.png`, `2-upper-air_geopotential-height_0500hPa.png` |
 | `3-waves_<name>.png` | Ocean waves, e.g. `3-waves_wave-height.png`, `3-waves_wave-height-10-12s.png` |
 | `4-constant_<name>.png` | Constant fields: `elevation`, `land-sea-mask`, `sea-depth`, … |
 
 What the cards contain:
+
+- Map frames are evenly spaced. The stride is the smallest of 6, 12, 24, 48 h … that fits in
+  12 frames. A 10-day forecast therefore shows one map per day at 00 UTC. Accumulations are
+  summed over the stride, giving daily totals, so no rain is lost between frames.
 
 - Each card has a small-multiples map strip with a shared colour bar, coastlines, borders and
   state borders. Below it is a time series for the region's cities, using the nearest grid point.

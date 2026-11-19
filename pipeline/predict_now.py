@@ -8,7 +8,7 @@ Steps:
   3. write PNG "weather cards" plus index.html to forecasts/<cycle>/cards/<region>/:
        0-overview.png                          classic per-city forecast card
        1-surface_<name>.png                    surface/soil fields, e.g. 1-surface_2m-temperature.png
-       1-surface_<name>_per-6h.png / _accumulated-total.png   accumulations, e.g. 1-surface_precipitation_per-6h.png
+       1-surface_<name>_amounts.png / _accumulated-total.png   accumulations, e.g. 1-surface_precipitation_amounts.png
        2-upper-air_<name>_<llll>hPa.png        pressure levels, e.g. 2-upper-air_temperature_0850hPa.png
        3-waves_<name>.png                      ocean wave fields
        4-constant_<name>.png                   constant fields (orography, land-sea mask, ...)
@@ -376,6 +376,44 @@ def make_norm(spec, frames_data):
     return mcolors.Normalize(a, b), cmap, t, "neither"
 
 
+def frame_plan(arr, st0, st1, kind, variant):
+    """Choose map frames on a regular time grid.
+
+    Picks the smallest stride (6, 12, 24, 48, ... h) that yields at most MAX_FRAMES frames, so
+    frames are evenly spaced and (for strides >= 24 h) always at the same time of day.
+    Instantaneous fields and running totals are sampled at the stride; per-interval
+    accumulations and fluxes are aggregated over it (e.g. 24 h precipitation totals), so no
+    rain falls "between" frames. Returns (frame values, start steps, end steps, source indices or None).
+    """
+    n = arr.shape[0]
+    if n <= MAX_FRAMES:
+        return arr, st0, st1, list(range(n))
+    base = int(np.min(st1 - st0)) if kind != "inst" else int(np.min(np.diff(st1)))
+    base = max(base, 1)
+    strides = [m * base for m in range(1, 1000) if (24 % (m * base) == 0 or (m * base) % 24 == 0)]
+    for S in strides:
+        if kind == "inst" or variant == "cumul":
+            sel = [i for i in range(n) if st1[i] % S == 0]
+            if 0 < len(sel) <= MAX_FRAMES:
+                return arr[sel], st0[sel], st1[sel], sel
+        else:
+            starts = np.arange(st0[0], st1[-1] - S + 1, S)
+            if 0 < len(starts) <= MAX_FRAMES:
+                vals, a_, b_ = [], [], []
+                for a in starts:
+                    m = (st0 >= a) & (st1 <= a + S)
+                    if kind == "flux":
+                        wts = (st1[m] - st0[m]).astype(float)
+                        vals.append(np.tensordot(wts / wts.sum(), arr[m], axes=1))
+                    else:
+                        vals.append(arr[m].sum(axis=0))
+                    a_.append(a)
+                    b_.append(a + S)
+                return np.stack(vals), np.array(a_), np.array(b_), None
+    sel = sample_idx(n, MAX_FRAMES)  # fallback, should not happen
+    return arr[sel], st0[sel], st1[sel], sel
+
+
 def sample_idx(n, k):
     if n <= k:
         return list(range(n))
@@ -430,7 +468,7 @@ def card_filename(group: str, name: str, level, variant, kind: str, param: str =
     if level:
         parts.append(f"{int(level):04d}hPa")
     if kind == "acc" and group != "Constants":
-        parts.append("accumulated-total" if variant == "cumul" else "per-6h")
+        parts.append("accumulated-total" if variant == "cumul" else "amounts")
     return "_".join(parts) + ".png"
 
 
@@ -527,8 +565,11 @@ def _render_card(key, variant):
 
     cities = geo["cities"]
     # frames
-    fidx = sample_idx(arr.shape[0], MAX_FRAMES)
-    frames = [to_grid(arr[i], W, shape) for i in fidx]
+    if constant:
+        f_arr, f0, f1, fidx = arr, st0, st1, [0]
+    else:
+        f_arr, f0, f1, fidx = frame_plan(arr, st0, st1, spec["kind"], variant)
+    frames = [to_grid(f_arr[j], W, shape) for j in range(f_arr.shape[0])]
     norm, cmap, ticks, extend = make_norm(spec, frames)
     cmap = cmap.copy()
     cmap.set_bad("#00000000")
@@ -538,19 +579,24 @@ def _render_card(key, variant):
         name = f"{name} at {entry['level']} hPa"
     unit = spec["unit"]
     kind = spec["kind"]
-    interval = int(np.median(st1 - st0)) if (kind != "inst" and variant != "cumul" and not constant) else 0
+    per_interval = kind != "inst" and variant != "cumul" and not constant
+    interval = int(np.median(st1 - st0)) if per_interval else 0  # time-series resolution
+    finterval = int(np.median(f1 - f0)) if per_interval else 0  # map-frame aggregation
+    ts_unit_lbl = unit
     if kind == "acc" and variant == "cumul":
         name += " - accumulated total"
-        unit_lbl = f"{unit} since initial time"
+        unit_lbl = ts_unit_lbl = f"{unit} since initial time"
     elif kind == "acc":
-        name += f" - {interval}-hourly amounts"
-        unit_lbl = f"{unit} per {interval} h"
+        name += " - daily amounts" if finterval == 24 else f" - {finterval}-hourly amounts"
+        unit_lbl = f"{unit} per {finterval} h"
+        ts_unit_lbl = f"{unit} per {interval} h"
     elif kind == "flux":
-        unit_lbl = f"{unit} (mean over {interval} h)"
+        unit_lbl = f"{unit} (mean over {finterval} h)"
+        ts_unit_lbl = f"{unit} (mean over {interval} h)"
     else:
         unit_lbl = unit
 
-    n = len(fidx)
+    n = len(frames)
     rows = 1 if n <= 6 else 2
     ncols = math.ceil(n / rows)
     FW, FH = 16.0, 11.5
@@ -580,7 +626,7 @@ def _render_card(key, variant):
                           wspace=0.04, hspace=0.18)
     quiv = entry.get("uv")
     im = None
-    for j, i in enumerate(fidx):
+    for j in range(n):
         ax = fig.add_subplot(gs[j // ncols, j % ncols])
         g = frames[j]
         gm = np.ma.masked_invalid(g)
@@ -599,7 +645,7 @@ def _render_card(key, variant):
                     lv = ticker.MaxNLocator(nbins=14).tick_values(fin.min(), fin.max())
                 if len(lv) > 1:
                     ax.contour(geo["gx"], geo["gy"], g, levels=lv, colors="k", linewidths=0.35, alpha=0.6, zorder=3)
-        if quiv:
+        if quiv and fidx is not None:
             ug = to_grid(c["entries"][quiv[0]]["vals"][fidx[j]], W, shape)
             vg = to_grid(c["entries"][quiv[1]]["vals"][fidx[j]], W, shape)
             sk = max(1, int(round(0.7 / GRID_RES)) if bbox[1] - bbox[0] < 20 else int(round(2.0 / GRID_RES)))
@@ -609,15 +655,16 @@ def _render_card(key, variant):
         if constant:
             ttl = "Fixed field"
         elif kind == "inst":
-            v = init + dt.timedelta(hours=int(st1[i]))
-            ttl = f"{fmt_valid(v)}\n+{int(st1[i])} h"
+            v = init + dt.timedelta(hours=int(f1[j]))
+            ttl = f"{fmt_valid(v)}\n+{int(f1[j])} h"
         elif variant == "cumul":
-            v = init + dt.timedelta(hours=int(st1[i]))
-            ttl = f"until {fmt_valid(v)}\n0 to +{int(st1[i])} h"
+            v = init + dt.timedelta(hours=int(f1[j]))
+            ttl = f"until {fmt_valid(v)}\n0 to +{int(f1[j])} h"
         else:
-            a = init + dt.timedelta(hours=int(st0[i]))
-            b = init + dt.timedelta(hours=int(st1[i]))
-            ttl = f"{a:%d %b %H}–{b:%H} UTC\n+{int(st0[i])} to +{int(st1[i])} h"
+            a = init + dt.timedelta(hours=int(f0[j]))
+            b = init + dt.timedelta(hours=int(f1[j]))
+            ttl = (f"{a:%d %b %H}–{b:%H} UTC" if (b - a) < dt.timedelta(hours=24)
+                   else f"{a:%d %b %H}–{b:%d %b %H} UTC") + f"\n+{int(f0[j])} to +{int(f1[j])} h"
         ax.set_title(ttl, fontsize=9.5 if ncols <= 5 else 8.5, pad=3, linespacing=1.15)
 
     # --- colorbar
@@ -659,7 +706,7 @@ def _render_card(key, variant):
             ax.set_title("No city grid point has data (sea-only field): regional max and mean over all valid points",
                          fontsize=11, loc="left", color="#333")
         ax.grid(alpha=0.3)
-        ax.set_ylabel(unit_lbl, fontsize=10)
+        ax.set_ylabel(ts_unit_lbl, fontsize=10)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b\n%H UTC"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
         ax.tick_params(labelsize=9)
