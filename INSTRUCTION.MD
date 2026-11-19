@@ -167,18 +167,36 @@ fields, in +/- pairs. Amplitudes are about typical analysis errors (see the scri
 - Be careful with the result. This is a simple initial-condition ensemble and not ECMWF's ENS
   (no singular vectors, no ensemble of data assimilations, no model-error perturbations).
   Probabilities are not calibrated.
-- One check against ECMWF's AIFS ENS (open data, cycle 2026-11-19 06Z, Germany box mean):
+- One check against ECMWF's AIFS ENS (open data, cycle 2026-11-19 06Z, 50 perturbed members on
+  each side, Germany box). The numbers are the ratio of our spread to ECMWF's spread. Spread is
+  the area mean of the per-grid-point standard deviation over the members. A value of 1.00 means
+  the same spread.
 
-  | +240 h | ECMWF AIFS ENS | this ensemble |
-  |--------|----------------|---------------|
-  | 2 m temperature, ensemble mean | 4.75 °C | 4.57 °C |
-  | 2 m temperature, spread | 2.84 K | 3.04 K |
-  | sea-level pressure, spread | 10.2 hPa | 9.4 hPa |
-  | 500 hPa height, spread | 122 gpm | 125 gpm |
+  | day | 2 m temp. | 10 m wind | MSL pressure | 850 hPa temp. | 500 hPa height |
+  |----:|------:|------:|------:|------:|------:|
+  |  1 | 0.59 | 0.64 | 1.37 | 0.81 | 1.51 |
+  |  2 | 0.91 | 0.89 | 0.94 | 1.10 | 1.21 |
+  |  3 | 0.69 | 0.73 | 1.08 | 1.07 | 1.39 |
+  |  4 | 1.07 | 1.06 | 1.11 | 1.06 | 1.09 |
+  |  5 | 0.89 | 0.89 | 1.06 | 1.00 | 1.10 |
+  |  6 | 1.03 | 0.89 | 1.06 | 1.09 | 1.19 |
+  |  7 | 0.92 | 0.91 | 1.05 | 1.16 | 1.10 |
+  |  8 | 0.91 | 1.10 | 1.14 | 0.96 | 1.22 |
+  |  9 | 1.01 | 0.98 | 0.98 | 1.00 | 1.12 |
+  | 10 | 1.12 | 0.91 | 0.91 | 1.05 | 1.01 |
 
-  The spread is similar from about day 5 on. In that case, the deterministic forecast (the
-  control) was about 6 K colder than both ensemble means at day 10, so a control at the edge
-  of the band can be real. The first days and other cases are not verified.
+  Absolute values at day 10, ECMWF vs ours: 2 m temperature 3.4 / 3.8 K, MSL pressure
+  10.6 / 9.6 hPa, 500 hPa height 128 / 130 gpm.
+
+  - From day 4 on, the spread is within about 10-20 % of ECMWF's, for every variable.
+  - In the first 3 days, the near-surface spread (2 m temperature, 10 m wind) is too small,
+    by 30-40 % on day 1. The 500 hPa height spread is too large, by up to 50 %. The upper-air
+    perturbations are a bit too strong, and the surface ones too weak. ECMWF's ensemble also
+    perturbs the land surface and the model itself, which this ensemble does not.
+  - In this case the deterministic forecast (the control) was about 6 K colder than both ensemble
+    means at day 10 (ECMWF 4.75 °C, ours 4.57 °C). A control at the edge of the band can be real.
+  - This is a single case. Spread agreement does not show that the ensemble is reliable, which
+    would need verification against observations over many cycles.
 
 ## Keep it running automatically
 

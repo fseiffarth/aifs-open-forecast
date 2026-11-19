@@ -8,7 +8,7 @@ ECMWF open data, and turn the forecast into weather cards. One command does both
 ```
 
 On a single RTX PRO 6000 (96 GB) the full 10-day forecast takes about **2 min 40 s**, and all
-131 cards take another 40 s.
+131 cards take another 40 s. The optional 51-member ensemble (below) adds about 54 min.
 
 ## What it does
 
@@ -65,10 +65,18 @@ how confident the forecast is. Without one, the cards look as before.
   the probability of at least 1 mm and at least 10 mm in each 24 h. Time series show the
   ensemble mean with the 10-90 % band.
 
+![Ensemble precipitation probability card](docs/example-precipitation-probability.png)
+
+The example cards above are from the 51-member ensemble of the 2026-11-19 06 UTC cycle. The
+bands widen from about day 5. Around day 10 the deterministic forecast (red line) sits at the
+cold edge of the band. ECMWF's own AIFS ENS shows the same thing for this cycle, so it is not
+an artefact of the perturbations.
+
 A 10-90 % band is meant to hold the true weather about 8 times out of 10, if the ensemble is
 reliable. This one is not guaranteed to be. It is a simple initial-condition ensemble, not
 ECMWF's ENS. In one check against ECMWF's AIFS ENS, its spread over Germany was similar from
-about day 5 on (see INSTRUCTION.MD), but other cases and the first days are not verified. Treat
+about day 5 on, within about 10-20 %. In the first 3 days it is too small near the surface and too
+large at 500 hPa (see INSTRUCTION.MD). Other cases are not verified. Treat
 the percentages as relative confidence, not calibrated probabilities. The number of members
 used is printed in the subtitle.
 
