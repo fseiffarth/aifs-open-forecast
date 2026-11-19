@@ -109,6 +109,25 @@ def build_config(date: dt.datetime, lead_time: str, device: str, out_dir: Path) 
     return cfg
 
 
+def runtime_env(device: str, threads: int | None = None) -> dict:
+    """Environment for running anemoi-inference (used by forecast.py and ensemble.py)."""
+    env = os.environ.copy()
+    cache = ROOT / ".cache"  # keep all caches on the project disk (home has a small quota)
+    env.setdefault("XDG_CACHE_HOME", str(cache))
+    env.setdefault("HF_HOME", str(cache / "huggingface"))
+    env.setdefault("TMPDIR", str(cache / "tmp"))
+    Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+    # mir (open-data regridding) preloads atlas' Fortran binding, which needs libgfortran.so.5;
+    # the machine has none, so a copy from conda-forge lives in .sysdeps/runtime.
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, [str(ROOT / ".sysdeps" / "runtime"), env.get("LD_LIBRARY_PATH")]))
+    env.setdefault("OMP_NUM_THREADS", str(threads or os.cpu_count()))
+    env.setdefault("ANEMOI_INFERENCE_NUM_CHUNKS", "16")  # chunk the graph mappers to cap memory
+    if not native_flash_attn_usable(device):
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(COMPAT_DIR), env.get("PYTHONPATH")]))
+        log("using PyTorch flash_attn shim (no sm_80+ GPU / flash-attn)")
+    return env
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--lead-time", default="240h", help="forecast length, e.g. 48h, 5d, 240h (default 240h)")
@@ -145,21 +164,7 @@ def main() -> int:
     cfg_path = out_dir / "config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
-    env = os.environ.copy()
-    cache = ROOT / ".cache"  # keep all caches on the project disk (home has a small quota)
-    env.setdefault("XDG_CACHE_HOME", str(cache))
-    env.setdefault("HF_HOME", str(cache / "huggingface"))
-    env.setdefault("TMPDIR", str(cache / "tmp"))
-    Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-    # mir (open-data regridding) preloads atlas' Fortran binding, which needs libgfortran.so.5;
-    # the machine has none, so a copy from conda-forge lives in .sysdeps/runtime.
-    env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, [str(ROOT / ".sysdeps" / "runtime"), env.get("LD_LIBRARY_PATH")]))
-    env.setdefault("OMP_NUM_THREADS", str(args.threads))
-    env.setdefault("ANEMOI_INFERENCE_NUM_CHUNKS", "16")  # chunk the graph mappers to cap memory
-    if not native_flash_attn_usable(device):
-        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(COMPAT_DIR), env.get("PYTHONPATH")]))
-        log("using PyTorch flash_attn shim (no sm_80+ GPU / flash-attn)")
-
+    env = runtime_env(device, args.threads)
     log(f"forecast from {date:%Y-%m-%d %HZ}, lead time {args.lead_time}, device {device}")
     log_file = out_dir / "run.log"
     with open(log_file, "w") as lf:
