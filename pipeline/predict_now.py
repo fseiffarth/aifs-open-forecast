@@ -622,12 +622,19 @@ def _render_card(key, variant):
     left = (1 - mw) / 2
     top = 1 - (title_h + 0.5) / FH
     bottom = top - maps_h / FH
-    gs = fig.add_gridspec(rows, ncols if not constant else 1, left=left, right=left + mw, top=top, bottom=bottom,
-                          wspace=0.04, hspace=0.18)
+    # each map spans two half-columns so a short last row can be centred
+    gs = fig.add_gridspec(rows, 2 * ncols if not constant else 1, left=left, right=left + mw, top=top,
+                          bottom=bottom, wspace=0.08, hspace=0.18)
+    last_row_off = ncols * rows - n  # half-columns to shift the last row by
     quiv = entry.get("uv")
     im = None
     for j in range(n):
-        ax = fig.add_subplot(gs[j // ncols, j % ncols])
+        r, c0 = divmod(j, ncols)
+        if constant:
+            ax = fig.add_subplot(gs[0, 0])
+        else:
+            c0 = 2 * c0 + (last_row_off if r == rows - 1 else 0)
+            ax = fig.add_subplot(gs[r, c0:c0 + 2])
         g = frames[j]
         gm = np.ma.masked_invalid(g)
         if spec["style"] == "precip":
