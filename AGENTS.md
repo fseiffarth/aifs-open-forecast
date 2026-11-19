@@ -38,6 +38,7 @@ Runs ECMWF's AIFS Single v2.0 from the latest ECMWF open-data cycle
 
 ## Verify
 
+- `.venv/bin/python -m pytest -q tests` passes (no GPU or forecast data needed).
 - `pipeline/run_forecast.sh --lead-time 12h --device cuda --output-root forecasts-test`
   ends with `done:` and writes `DONE`.
 - `./predict_now.sh --skip-forecast --output-root forecasts-test` reports
