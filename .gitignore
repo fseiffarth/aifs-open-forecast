@@ -1,22 +1,23 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
-node_modules/
-target/
-dist/
-build/
-.env
-.env.local
-.DS_Store
+
+# Downloaded model, cloned dependencies, local runtime libs and caches
+models/
+anemoi-core/
+.sysdeps/
+.cache/
+
+# Forecast output (GRIB files are ~2 GB per 10-day run)
+forecasts/
+forecasts-test*/
+
+# Misc
 *.log
 *.swp
 *.swo
 .idea/
-.tabtivity/
-tabtivity-screenshots/
-tabtivity-emails/
-eldrun-screenshots/
-eldrun-emails/
-screenshots/
-emails/
-project.json
+.DS_Store
+.env
+.env.local
