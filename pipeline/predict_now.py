@@ -738,19 +738,24 @@ def render_overview():
             xcl = mdates.date2num([(init.replace(tzinfo=dt.timezone.utc) + dt.timedelta(hours=int(s))).astimezone(tz)
                                    for s in tcc["step_list"]])  # tcc may lack step 0: align by valid time
             for x, cv in zip(xcl, cl):
-                axc.bar(x, 1, width=w, color=plt.cm.Greys(0.12 + 0.7 * cv), edgecolor="white", lw=0.5)
-                axc.text(x, 0.5, f"{cv * 100:.0f}", ha="center", va="center", fontsize=7,
-                         color="white" if cv > 0.45 else "#333")
+                axc.bar(x, 1, width=w, color=plt.cm.Greys(0.12 + 0.7 * cv), edgecolor="white",
+                        lw=0.5 if len(xcl) <= 16 else 0)
+                if len(xcl) <= 16:  # numbers only fit for short forecasts; shading alone otherwise
+                    axc.text(x, 0.5, f"{cv * 100:.0f}", ha="center", va="center", fontsize=7,
+                             color="white" if cv > 0.45 else "#333")
         axc.set_ylabel("cloud %", fontsize=8, rotation=0, ha="right", va="center")
         axc.set_yticks([])
         # wind strip
         axw.set_ylim(-1, 1)
         if u10 is not None and v10 is not None:
             u, v = u10["vals"][:, i], v10["vals"][:, i]
+            # long forecasts: one arrow + number every k steps (~12 per panel) so labels don't overlap
+            k = max(1, int(np.ceil(len(xs) / 12)))
+            xw, u, v = xs[::k], u[::k], v[::k]
             sp = np.hypot(u, v)
-            axw.quiver(xs, np.full_like(xs, 0.35), u / np.maximum(sp, 1e-6), v / np.maximum(sp, 1e-6), pivot="mid",
+            axw.quiver(xw, np.full_like(xw, 0.35), u / np.maximum(sp, 1e-6), v / np.maximum(sp, 1e-6), pivot="mid",
                        angles="uv", scale_units="height", scale=4, width=0.006, color="#2a4d69", zorder=3)
-            for x, s in zip(xs, sp):
+            for x, s in zip(xw, sp):
                 axw.text(x, -0.55, f"{s * 3.6:.0f}", ha="center", va="center", fontsize=7.5, color="#2a4d69")
         axw.set_ylabel("wind km/h", fontsize=8, rotation=0, ha="right", va="center")
         axw.set_yticks([])
@@ -761,7 +766,7 @@ def render_overview():
             # local midnights
         for a in (axc, axm, axw):
             a.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 12 if len(xs) > 12 else 6), tz=tz) if len(xs) <= 20
-                                      else mdates.DayLocator(tz=tz))
+                                      else mdates.DayLocator(interval=2 if len(xs) > 28 else 1, tz=tz))
             a.xaxis.set_major_formatter(mdates.DateFormatter("%a %H", tz=tz) if len(xs) <= 20
                                         else mdates.DateFormatter("%a %d", tz=tz))
         axc.tick_params(labelbottom=False, bottom=False)
