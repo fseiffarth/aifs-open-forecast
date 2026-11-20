@@ -1,16 +1,36 @@
 # AIFS weather forecast pipeline
 
 Run ECMWF's machine-learned weather model **AIFS Single v2.0** from the latest real-time
-ECMWF open data, and turn the forecast into weather cards. One command does both:
+ECMWF open data, and turn the forecast into weather cards. Optionally, a 51-member ensemble
+with ECMWF's **AIFS ENS v2.0** adds how confident the forecast is: uncertainty bands, rain
+probabilities and ensemble maps on the cards. One command does all of it:
 
 ```bash
-./predict_now.sh          # newest cycle → 10-day global forecast → weather cards for Europe
+./predict_now.sh                             # newest cycle → 10-day global forecast → weather cards for Europe
+./predict_now.sh --ensemble-members 50       # the same, plus both 51-member ensembles and comparison cards
+./predict_now.sh --ensemble-members 50 --ensemble-model ens      # AIFS ENS only (once: ./setup.sh --ens)
+./predict_now.sh --ensemble-members 50 --ensemble-model single   # AIFS Single + perturbations only
 ```
 
 On a single RTX 3090 (24 GB) the full 10-day forecast takes about **3 min 20 s** and uses
 about 7.4 GB of GPU memory. On a single RTX PRO 6000 (96 GB) it takes about **2 min 40 s**, and all
-131 cards take another 40 s. The optional 51-member ensembles (below) add about 80 min
-(AIFS ENS) and 58 min (AIFS Single with perturbed initial conditions) for Europe.
+131 cards take another 40 s.
+
+There are two ways to make the ensemble. With `--ensemble-members`, both run by default and are
+compared:
+
+| | **AIFS ENS v2.0** (recommended) | **AIFS Single + perturbations** |
+|---|---|---|
+| Model | ECMWF's ensemble model ([`ecmwf/aifs-ens-2.0`](https://huggingface.co/ecmwf/aifs-ens-2.0), ~2.6 GB, own `.venv-ens`) | the deterministic AIFS Single v2.0 |
+| Initial states | ECMWF's 50 perturbed analyses from open data + the unperturbed analysis | the analysis + our smooth random perturbations, in +/- pairs |
+| Model uncertainty | trained noise inside the model | none |
+| Spread vs ECMWF's AIFS ENS | within about 5 % | 10-25 % too narrow from day 3 |
+| 51 members, Europe, RTX PRO 6000 | 80 min (≈ 92 s per member) | 58 min (≈ 67 s per member) |
+| 51 members, Europe, RTX 3090 | ≈ 97 min (≈ 114 s per member, 12.3 GB GPU memory) | 1 h 47 min (≈ 125 s per member) |
+
+With both ensembles (the default) the run takes about 2 h 20 min longer on the RTX PRO 6000 and
+about 3 h 25 min longer on the RTX 3090; `--ensemble-model ens` runs AIFS ENS only. Numbers are
+from the 2026-11-19 12 UTC cycle; details are below and in INSTRUCTION.MD.
 
 ## What it does
 
