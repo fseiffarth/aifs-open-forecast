@@ -21,3 +21,4 @@ forecasts-test*/
 .DS_Store
 .env
 .env.local
+.venv*/

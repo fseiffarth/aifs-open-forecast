@@ -27,12 +27,20 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = ROOT / "models" / "aifs-single-2.0"
-CHECKPOINT = MODEL_DIR / "aifs-single-mse-2.0.ckpt"
-CHECKPOINT_SHA256 = "4e23ef40157b9e99b5228e5dcffb0d0d5a789f019ffcc89033ee9caae5d7ff6b"
-HF_REPO = "ecmwf/aifs-single-2.0"
-BASE_CONFIG = MODEL_DIR / "inference.yaml"
 COMPAT_DIR = Path(__file__).resolve().parent / "compat"
+
+# Each model has its own package pins (models/<name>/pyproject.toml), hence its own venv.
+MODELS = {
+    "single": dict(dir=ROOT / "models" / "aifs-single-2.0", checkpoint="aifs-single-mse-2.0.ckpt",
+                   sha256="4e23ef40157b9e99b5228e5dcffb0d0d5a789f019ffcc89033ee9caae5d7ff6b",
+                   hf_repo="ecmwf/aifs-single-2.0", size="~1 GB", venv=ROOT / ".venv"),
+    "ens": dict(dir=ROOT / "models" / "aifs-ens-2.0", checkpoint="aifs-ens-crps-2.0.ckpt",
+                sha256="e383027ee9a20469b920ed11f9af2ecc9268ebcf826447638c5c9fa296fbbbdb",
+                hf_repo="ecmwf/aifs-ens-2.0", size="~2.6 GB", venv=ROOT / ".venv-ens"),
+}
+MODEL_DIR = MODELS["single"]["dir"]
+CHECKPOINT = MODEL_DIR / MODELS["single"]["checkpoint"]
+BASE_CONFIG = MODEL_DIR / "inference.yaml"
 VENV_BIN = ROOT / ".venv" / "bin"
 
 
@@ -70,42 +78,46 @@ def resolve_device(requested: str) -> str:
     return "cpu"
 
 
-def ensure_model(model_dir: Path = MODEL_DIR) -> None:
-    """Download the checkpoint and its config from Hugging Face on first use (~1 GB)."""
-    ckpt = model_dir / CHECKPOINT.name
-    needed = [ckpt, model_dir / BASE_CONFIG.name, model_dir / "lsm.grib"]
+def ensure_model(model: str = "single") -> None:
+    """Download the checkpoint and its config from Hugging Face on first use."""
+    m = MODELS[model]
+    model_dir, hf_repo = m["dir"], m["hf_repo"]
+    ckpt = model_dir / m["checkpoint"]
+    needed = [ckpt, model_dir / "inference.yaml", model_dir / "lsm.grib"]
     if all(f.exists() for f in needed):
         return
     os.environ.setdefault("HF_HOME", str(ROOT / ".cache" / "huggingface"))  # keep out of $HOME
     from huggingface_hub import snapshot_download
 
-    log(f"model not found in {model_dir}; downloading {HF_REPO} from Hugging Face (~1 GB, once)")
-    snapshot_download(HF_REPO, local_dir=model_dir)
+    log(f"model not found in {model_dir}; downloading {hf_repo} from Hugging Face ({m['size']}, once)")
+    snapshot_download(hf_repo, local_dir=model_dir)
     missing = [f.name for f in needed if not f.exists()]
     if missing:
-        raise SystemExit(f"download of {HF_REPO} is missing {', '.join(missing)}")
+        raise SystemExit(f"download of {hf_repo} is missing {', '.join(missing)}")
     log("verifying checkpoint checksum")
     h = hashlib.sha256()
     with open(ckpt, "rb") as f:
         for block in iter(lambda: f.read(1 << 24), b""):
             h.update(block)
-    if h.hexdigest() != CHECKPOINT_SHA256:
+    if h.hexdigest() != m["sha256"]:
         ckpt.rename(ckpt.with_suffix(".ckpt.bad"))
         raise SystemExit(f"checkpoint checksum mismatch (got {h.hexdigest()}); moved to {ckpt.name}.bad")
     log(f"model ready in {model_dir}")
 
 
-def build_config(date: dt.datetime, lead_time: str, device: str, out_dir: Path) -> dict:
-    cfg = yaml.safe_load(BASE_CONFIG.read_text())
-    cfg["checkpoint"] = str(CHECKPOINT)
+def build_config(date: dt.datetime, lead_time: str, device: str, out_dir: Path, model: str = "single") -> dict:
+    m = MODELS[model]
+    cfg = yaml.safe_load((m["dir"] / "inference.yaml").read_text())
+    cfg["checkpoint"] = str(m["dir"] / m["checkpoint"])
     cfg["date"] = date.strftime("%Y-%m-%dT%H:%M:%S")
     cfg["lead_time"] = lead_time
     cfg["device"] = device
+    cfg.pop("env", None)  # runtime_env() sets ANEMOI_INFERENCE_NUM_CHUNKS for every model
     for proc in cfg.get("pre_processors", []):
         spec = proc.get("forward-transform-filter")
         if isinstance(spec, dict) and "path" in spec:
-            spec["path"] = str(MODEL_DIR / Path(spec["path"]).name)
-    cfg["output"]["grib"]["path"] = str(out_dir / f"aifs-single-2.0_{date:%Y%m%d%H}.grib")
+            spec["path"] = str(m["dir"] / Path(spec["path"]).name)
+    cfg["output"]["grib"]["path"] = str(out_dir / f"{m['dir'].name}_{date:%Y%m%d%H}.grib")
     return cfg
 
 

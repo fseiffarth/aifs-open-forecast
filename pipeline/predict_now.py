@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forecast "now" with AIFS and render weather cards for a region (default: Germany).
+"""Forecast "now" with AIFS and render weather cards for a region (default: Europe).
 
 Steps:
   1. run pipeline/forecast.py for the latest ECMWF open-data cycle (skipped if that cycle is
@@ -14,7 +14,7 @@ Steps:
        4-constant_<name>.png                   constant fields (orography, land-sea mask, ...)
 
 Examples:
-  predict_now.sh                              # latest cycle, 10-day (240 h) forecast, Germany
+  predict_now.sh                              # latest cycle, 10-day (240 h) forecast, Europe
   predict_now.sh --lead-time 120h --device cpu
   predict_now.sh --skip-forecast              # only re-render the newest finished cycle
   predict_now.sh --grib some.grib --region europe
@@ -300,9 +300,11 @@ def load_lines(bbox):
     lo0, lo1, la0, la1 = bbox
     clip = box(lo0 - 1, la0 - 1, lo1 + 1, la1 + 1)
     layers = {}
-    for name, cat, ds_name in (("coast", "physical", "coastline"),
-                               ("border", "cultural", "admin_0_boundary_lines_land"),
-                               ("state", "cultural", "admin_1_states_provinces_lines")):
+    sources = [("coast", "physical", "coastline"), ("border", "cultural", "admin_0_boundary_lines_land")]
+    # State/province borders only help on country-sized views; on Europe they bury the field.
+    if lo1 - lo0 < 20:
+        sources.append(("state", "cultural", "admin_1_states_provinces_lines"))
+    for name, cat, ds_name in sources:
         segs = []
         for res in ("10m", "50m"):
             try:
@@ -319,7 +321,6 @@ def load_lines(bbox):
             except Exception as exc:  # offline / missing: try coarser, else skip
                 log(f"natural earth {ds_name} {res} unavailable ({type(exc).__name__}: {exc})")
         layers[name] = segs
-    # German state borders only make sense for Germany-sized views; keep all within clip
     return layers
 
 
@@ -886,9 +887,9 @@ def _render_ens_card(cid):
              color="#14213d")
     sub = (f"Initial time {init:%a %Y-%m-%d %H} UTC   ·   valid {fmt_valid(init + dt.timedelta(hours=int(f1.min())))} to "
            f"{fmt_valid(init + dt.timedelta(hours=int(f1.max())))}   ·   {nm}-member ensemble "
-           f"(initial-condition perturbations)   ·   {region['title']}")
+           f"({c['ens']['label']})   ·   {region['title']}")
     fig.text(0.02, 1 - 0.78 / FH, sub, fontsize=11.5, va="center", color="#444")
-    fig.text(0.98, 1 - 0.35 / FH, "AIFS Single v2.0", fontsize=11, ha="right", va="center", color="#888")
+    fig.text(0.98, 1 - 0.35 / FH, c["ens"]["model_name"], fontsize=11, ha="right", va="center", color="#888")
 
     mw = min(0.96, max(0.35, n * 0.095))
     left = (1 - mw) / 2
@@ -961,8 +962,8 @@ def _render_ens_card(cid):
         ax.legend(loc="center left", bbox_to_anchor=(1.07, 0.5), frameon=False, fontsize=10)
     else:
         ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=10)
-    fig.text(0.98, 0.012, f"Generated {dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC  ·  simple initial-condition "
-             f"ensemble (not ECMWF ENS), probabilities not calibrated  ·  grid: N320 (~31 km)", fontsize=8, ha="right",
+    fig.text(0.98, 0.012, f"Generated {dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC  ·  {c['ens']['note']}, "
+             f"probabilities not calibrated  ·  grid: N320 (~31 km)", fontsize=8, ha="right",
              color="#999")
     fn = c["fnames"][(("ens", cid), None)]
     fig.savefig(c["outdir"] / fn, dpi=100)
@@ -993,7 +994,7 @@ def render_overview():
     sub = (f"AIFS Single v2.0 forecast started {init:%a %d %b %Y, %H} UTC  ·  local time "
            f"({region['tz']})  ·  nearest model grid point to each city")
     if ens:
-        sub += f"  ·  {ens['n']}-member ensemble (initial-condition perturbations)"
+        sub += f"  ·  {ens['n']}-member ensemble ({ens['label']})"
     fig.text(0.02, 0.928, sub, fontsize=11.5, color="#444", va="center")
     outer = fig.add_gridspec(2, 3, left=0.045, right=0.96, top=0.86, bottom=0.075 if ens else 0.05, wspace=0.28, hspace=0.45)
     ncity = len(cities)
@@ -1144,7 +1145,7 @@ def render_overview():
 # Index page
 # --------------------------------------------------------------------------------------
 def write_index(outdir, region, init, items, skipped, lead):
-    groups = ["Overview", "Ensemble", "Surface", "Pressure levels", "Waves", "Constants"]
+    groups = ["Overview", "Ensemble", "Comparison", "Surface", "Pressure levels", "Waves", "Constants"]
     h = [f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AIFS weather cards {html.escape(region['title'])} {init:%Y-%m-%d %H}Z</title><style>
 body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#14213d}}
@@ -1186,7 +1187,7 @@ def find_cycle(out_root: Path, date: str | None) -> Path | None:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--region", default="germany", choices=sorted(REGIONS), help="named region (default germany)")
+    p.add_argument("--region", default="europe", choices=sorted(REGIONS), help="named region (default europe)")
     p.add_argument("--lead-time", default="240h", help="forecast length passed to forecast.py, e.g. 48h, 5d, 240h "
                    "(default 240h = 10 days; about 3.5 min on a large GPU)")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
@@ -1202,8 +1203,13 @@ def main() -> int:
                    help="auto: add ensemble bands/probabilities when forecasts/<cycle>/ensemble/<region>/ has members "
                    "(default); off: render the deterministic forecast only")
     p.add_argument("--ensemble-members", type=int, default=0, metavar="N",
-                   help="after the forecast, run pipeline/ensemble.py with N perturbed members (even; 50 = 51 members, "
-                   "about 45 min for 10 days on a large GPU). Default 0: do not run it, but use stored members")
+                   help="after the forecast, run pipeline/ensemble.py with N perturbed members (50 = 51 members, "
+                   "about 1 h for 10 days on a large GPU). Default 0: do not run it, but use stored members")
+    p.add_argument("--ensemble-model", default="both", choices=["both", "ens", "single"],
+                   help="which ensemble to run and show: ens = AIFS ENS v2.0 (ensemble-aifs-ens/<region>/); "
+                   "single = AIFS Single with our perturbed initial conditions (ensemble/<region>/); both (default) = "
+                   "run both, show AIFS ENS on the cards (or the other one if only that exists), and add "
+                   "comparison cards (6-compare_*.png) when both exist")
     p.add_argument("--only", help="comma-separated params to render (e.g. 2t,tp,t_850), for debugging")
     args = p.parse_args()
     out_root = Path(args.output_root)
@@ -1225,10 +1231,11 @@ def main() -> int:
             if rc != 0:
                 log(f"forecast failed (exit {rc}); not rendering")
                 return rc
-        if args.ensemble_members > 0:
+        run_models = ["ens", "single"] if args.ensemble_model == "both" else [args.ensemble_model]
+        for model in run_models if args.ensemble_members > 0 else []:
             cmd = [sys.executable, str(Path(__file__).parent / "ensemble.py"), "--members", str(args.ensemble_members),
                    "--lead-time", args.lead_time, "--region", args.region, "--device", args.device,
-                   "--source", args.source, "--output-root", str(out_root)]
+                   "--source", args.source, "--output-root", str(out_root), "--model", model]
             if args.date:
                 cmd += ["--date", args.date]
             if args.force:
@@ -1236,7 +1243,7 @@ def main() -> int:
             log("running ensemble: " + " ".join(cmd[1:]))
             rc = subprocess.call(cmd)
             if rc != 0:
-                log(f"ensemble failed (exit {rc}); rendering with the members that exist")
+                log(f"ensemble ({model}) failed (exit {rc}); rendering with the members that exist")
         cycle_dir = find_cycle(out_root, args.date)
         if cycle_dir is None or not (cycle_dir / "DONE").exists():
             log("no finished forecast cycle found" + (" (another run may still be in progress)" if not args.skip_forecast else ""))
@@ -1261,16 +1268,29 @@ def main() -> int:
         f"steps up to +{max(int(e['step_list'].max()) for e in entries.values())} h")
     lines = load_lines(region["bbox"])
 
-    ens = None
-    if args.ensemble == "auto" and (cycle_dir / "ensemble" / args.region).is_dir():
+    ens, loaded = None, {}
+    for model in (["ens", "single"] if args.ensemble_model == "both" else [args.ensemble_model]):
+        ens_dir = ens_stats.ensemble_dir(cycle_dir, args.region, model)
+        if args.ensemble != "auto" or not ens_dir.is_dir():
+            continue
         te = time.time()
-        ens = ens_stats.load_ensemble(cycle_dir / "ensemble" / args.region, geo["lat"], geo["lon"], log)
-        if ens:
-            ens["n"] = len(ens["members"])
-            done = (ens["dir"] / "DONE").exists()
-            log(f"ensemble: {ens['n']} members used" + ("" if done else f" (run not finished: {ens['expected']} planned)")
-                + f", {len(ens['names'])} variables, steps +{int(ens['steps'][0])}..+{int(ens['steps'][-1])} h, "
-                f"loaded in {time.time() - te:.1f}s")
+        e = ens_stats.load_ensemble(ens_dir, geo["lat"], geo["lon"], log)
+        if not e:
+            continue
+        e["n"] = len(e["members"])
+        if model == "ens":
+            e.update(label="AIFS ENS v2.0", model_name="AIFS ENS v2.0", note="AIFS ENS v2.0 ensemble")
+        else:
+            e.update(label="initial-condition perturbations", model_name="AIFS Single v2.0",
+                     note="simple initial-condition ensemble (not ECMWF ENS)")
+        done = (e["dir"] / "DONE").exists()
+        log(f"ensemble {model}: {e['n']} members used" + ("" if done else f" (run not finished: {e['expected']} planned)")
+            + f", {len(e['names'])} variables, steps +{int(e['steps'][0])}..+{int(e['steps'][-1])} h, "
+            f"loaded in {time.time() - te:.1f}s")
+        loaded[model] = e
+    if loaded:
+        ens = loaded.get("ens") or loaded["single"]  # the cards show AIFS ENS when it exists
+        log(f"cards show the {ens['label']} ensemble")
     CTX.update(entries=entries, geo=geo, region=region, init=init, outdir=outdir, lines=lines, ens=ens, ens_stats={},
                ens_cards={}, constant=lambda k: len(entries[k]["step_list"]) == 1 and nsteps_all > 1)
 
@@ -1362,7 +1382,14 @@ def main() -> int:
             skipped.append(f"{m['title']}: no valid data in region")
         else:
             failed.append((m["title"], err))
-    gorder = ["Overview", "Ensemble", "Surface", "Pressure levels", "Waves", "Constants"]
+    if len(loaded) == 2 and not only:
+        tc = time.time()
+        import compare_cards
+
+        cmp_items = compare_cards.render(loaded, geo, region, init, outdir, log)
+        items.extend(cmp_items)
+        log(f"comparison: {len(cmp_items)} cards in {time.time() - tc:.1f}s")
+    gorder = ["Overview", "Ensemble", "Comparison", "Surface", "Pressure levels", "Waves", "Constants"]
     lead = max(int(e["step_list"].max()) for e in entries.values())
     write_index(outdir, region, init, items, skipped, lead)
     counts = {g: sum(1 for i in items if i["group"] == g) for g in gorder}

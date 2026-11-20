@@ -3,7 +3,7 @@
 This pipeline runs **ECMWF AIFS Single v2.0** (`ecmwf/aifs-single-2.0`, operational since
 12 May 2026) from the **newest available ECMWF open-data analysis**. Every run forecasts
 from "now", meaning the latest published 00/06/12/18 UTC cycle. `predict_now.sh` then turns
-the forecast into weather cards (Germany by default).
+the forecast into weather cards (Europe by default).
 
 All commands below are run from the repository root.
 
@@ -16,7 +16,8 @@ All commands below are run from the repository root.
 | `pipeline/predict_now.py`, `predict_now.sh` | Forecast + weather cards | yes |
 | `pipeline/compat/` | Compatibility fixes, see [Compatibility fixes](#compatibility-fixes) | yes |
 | `models/aifs-single-2.0/` | Model checkpoint and config from Hugging Face | no (downloaded on first run) |
-| `anemoi-core/` | Clone of `ecmwf/anemoi-core` at tag `models-0.9.3` | no (clone, see Setup) |
+| `setup.sh` | One-time environment setup (anemoi-core, `.venv`, libgfortran) | yes |
+| `anemoi-core/` | Clone of `ecmwf/anemoi-core` at tag `models-0.9.3` | no (`setup.sh` clones it) |
 | `.venv/` | Python 3.12 environment | no |
 | `.sysdeps/` | `libgfortran.so.5` from conda-forge (only if the system lacks it) | no |
 | `.cache/` | All caches (earthkit, Hugging Face, cartopy, tmp) | no |
@@ -32,31 +33,22 @@ uvx --from huggingface_hub hf download ecmwf/aifs-single-2.0 --local-dir models/
 sha256sum models/aifs-single-2.0/aifs-single-mse-2.0.ckpt
 # expected: 4e23ef40157b9e99b5228e5dcffb0d0d5a789f019ffcc89033ee9caae5d7ff6b
 
-# 2. anemoi-core (anemoi-models is installed from it, editable)
-git clone https://github.com/ecmwf/anemoi-core.git
-git -C anemoi-core checkout models-0.9.3
-
-# 3. Python 3.12 environment with the versions the checkpoint pins
-uv venv -p 3.12 .venv
-uv pip install --python .venv/bin/python \
-  torch==2.7.0 --index-url https://download.pytorch.org/whl/cu128
-uv pip install --python .venv/bin/python \
-  -e anemoi-core/models anemoi-graphs==0.6.4 anemoi-training==0.6.3 \
-  "anemoi-inference[huggingface]==0.8.3" "anemoi-plugins-ecmwf-inference[opendata]==0.2.1" \
-  anemoi-transform==0.1.16.post2 anemoi-utils==0.4.35.post3 torch-geometric==2.6.1 \
-  earthkit-regrid==0.5.1 ecmwf-opendata==0.3.29 "earthkit-data<1" "earthkit-plots<1" \
-  cartopy matplotlib scipy pyyaml
-
-# 4. Only if `ldconfig -p | grep libgfortran.so.5` prints nothing (no sudo needed):
-conda create -y -p .sysdeps -c conda-forge --override-channels libgfortran5
-mkdir -p .sysdeps/runtime
-ln -sf ../lib/libgfortran.so.5 ../lib/libquadmath.so.0 .sysdeps/runtime/
+# 2. anemoi-core clone, Python 3.12 venv with the pinned packages, libgfortran if missing
+./setup.sh            # CUDA 12.8 torch wheel
+./setup.sh --cpu      # CPU-only torch wheel
+./setup.sh --ens      # also .venv-ens for the AIFS ENS v2.0 ensemble (see below)
 ```
+
+`setup.sh` is safe to re-run: it skips the clone and venv creation if they already exist,
+re-applies the pinned package versions, and installs libgfortran only if `ldconfig` doesn't
+find it. Read the script for the exact commands. It pins `torchvision==0.22.0` together with
+`torch==2.7.0`; without that pin the resolver pulls the newest torchvision and upgrades torch.
 
 flash-attn is optional. See the hardware notes below.
 
-If your home directory has a small quota, set `UV_CACHE_DIR` (and `CONDA_PKGS_DIRS`) to a
-directory on a larger disk before steps 3 and 4. The pipeline keeps its own caches in `.cache/`.
+`setup.sh` keeps the uv and conda package caches in `.cache/`. Set `UV_CACHE_DIR` /
+`CONDA_PKGS_DIRS` to use a different directory. `predict_now.sh` and `pipeline/run_forecast.sh`
+stop with a message pointing to `setup.sh` if `.venv/` is missing.
 
 ## Run a forecast now
 
@@ -94,7 +86,7 @@ region. It goes through `pipeline/forecast.py`, so a finished cycle is reused an
 still applies.
 
 ```bash
-./predict_now.sh                                 # latest cycle, 10 days (240 h), Germany
+./predict_now.sh                                 # latest cycle, 10 days (240 h), Europe
 ./predict_now.sh --lead-time 48h                 # shorter forecast
 ./predict_now.sh --skip-forecast                 # only render the newest finished cycle
 ./predict_now.sh --grib forecasts/2026111900/aifs-single-2.0_2026111900.grib   # render one file
@@ -114,7 +106,10 @@ Options:
   `off` renders the deterministic forecast only. The number of members used is logged and
   shown on the cards.
 - `--ensemble-members N`: after the forecast, run `pipeline/ensemble.py --members N` (default
-  0 = do not run it). `N` must be even; 50 gives 51 members.
+  0 = do not run it). 50 gives 51 members.
+- `--ensemble-model {both,ens,single}`: which ensemble to run and show (default `both`). The
+  cards show AIFS ENS when it exists, otherwise the perturbation ensemble. With both, the
+  `6-compare_*` cards are added. See the ensemble section below.
 
 Output goes to `forecasts/<cycle>/cards/<region>/`. Open `index.html` there. File names
 sort in the same order as the gallery:
@@ -128,6 +123,7 @@ sort in the same order as the gallery:
 | `3-waves_<name>.png` | Ocean waves, e.g. `3-waves_wave-height.png`, `3-waves_wave-height-10-12s.png` |
 | `4-constant_<name>.png` | Constant fields: `elevation`, `land-sea-mask`, `sea-depth`, … |
 | `5-ensemble_<name>.png` | Ensemble mean and spread (or probabilities for precipitation), only with an ensemble |
+| `6-compare_<name>.png` | AIFS ENS vs AIFS Single + perturbations per city, and spread against lead time; only when both ensembles exist |
 
 What the cards contain:
 
@@ -144,22 +140,99 @@ What the cards contain:
 
 ## Ensemble forecast (forecast confidence)
 
+There are two ways to get an ensemble, and by default the pipeline runs both and compares them:
+
+| | AIFS ENS v2.0 (`--model ens`) | AIFS Single + perturbations (`--model single`) |
+|---|---|---|
+| Model | [`ecmwf/aifs-ens-2.0`](https://huggingface.co/ecmwf/aifs-ens-2.0), trained for ensembles (CRPS loss, ~2.6 GB) | AIFS Single v2.0, the deterministic model |
+| Members | ECMWF's own 50 perturbed initial states (open data `enfo`/`waef`) + member 0 from the analysis | our smooth random perturbations of the analysis, in +/- pairs |
+| Model uncertainty | built-in noise, seeded per member | none |
+| Output | `forecasts/<cycle>/ensemble-aifs-ens/<region>/` | `forecasts/<cycle>/ensemble/<region>/` |
+| 51 members, 10 days, Europe, RTX PRO 6000 | 80 min (≈ 92 s per member, ≈ 25 s of it downloading and regridding the member's input) | 58 min |
+| 51 members, 10 days, Europe, RTX 3090 | ≈ 97 min without restarts (≈ 114 s per member, GPU memory ≈ 12.3 GB) | 1 h 47 min (≈ 125 s per member) |
+| Spread vs ECMWF's AIFS ENS | within about 5 % (it is the same system) | 10-25 % too small from day 3 |
+
+**Use AIFS ENS** for forecasts. It is what ECMWF runs operationally. The perturbation ensemble
+is kept as a transparent baseline and for the comparison cards.
+
+```bash
+./setup.sh --ens                                              # once: .venv-ens (newer anemoi pins)
+./predict_now.sh --ensemble-members 50                        # forecast, both ensembles, cards
+./predict_now.sh --ensemble-members 50 --ensemble-model ens   # AIFS ENS only (80 min instead of 140)
+.venv/bin/python pipeline/ensemble.py --model ens --members 50   # ensemble only
+```
+
+AIFS ENS pins newer packages (anemoi-models 0.11.2, anemoi-graphs 0.8.1) than AIFS Single, so
+it runs in its own `.venv-ens`; `ensemble.py` starts the worker in the right venv. The first run
+downloads the checkpoint into `models/aifs-ens-2.0/` and checks its sha256. ECMWF publishes the
+ensemble initial states with the same delay as the deterministic analysis, so the same cycles work.
+`--members` is 1-50 for AIFS ENS (ECMWF has 50 perturbed states). The next member's input is
+downloaded while the current one runs.
+
+Open-data downloads sometimes hang without an error (connection stuck, no timeout). If the
+worker prints nothing for 10 min, `ensemble.py` kills it and starts it again, up to 3 times;
+stored members are kept. The 3090 run below needed this twice.
+
+**RTX 3090 vs RTX PRO 6000 (AIFS ENS, cycle 2026-11-19 12Z, Europe, same seed).** Unlike the
+perturbation ensemble, the members do not agree to rounding level, probably because the model
+noise is drawn on the GPU and the two cards do not turn the same seed into the same numbers. The mean absolute
+difference per member in 2 m temperature is 0.07 K at day 1, 0.33 K at day 5 and 1.3 K at
+day 10, about half the spread by then. The ensemble statistics agree: spread of 2 m temperature
+0.57 / 1.19 / 2.73 K (3090) vs 0.57 / 1.18 / 2.76 K (RTX PRO 6000) at days 1 / 5 / 10, of
+500 hPa geopotential 47 / 378 / 894 vs 48 / 379 / 911 m²/s², and of sea-level pressure within
+1 % up to day 5 and 7 % at day 10 (801 vs 862 Pa). Treat the two runs as two samples of the same
+ensemble, not as copies.
+
+**Comparison for cycle 2026-11-19 12Z.** Both ensembles were run for Europe and compared with
+ECMWF's own AIFS ENS forecast from open data (50 perturbed members each). The numbers are the
+ratio of the spread to ECMWF's spread (area mean of the grid-point standard deviation, Europe
+box -12..35° E, 32..62° N). Each cell is *AIFS ENS (ours) / AIFS Single + perturbations*.
+
+| day | 2 m temp. | 10 m wind | MSL pressure | 850 hPa temp. | 500 hPa height |
+|----:|------:|------:|------:|------:|------:|
+|  1 | 1.06 / 1.04 | 1.09 / 0.67 | 1.04 / 1.26 | 1.04 / 0.98 | 1.04 / 1.29 |
+|  2 | 1.08 / 0.92 | 1.08 / 0.62 | 1.03 / 1.02 | 1.07 / 0.86 | 1.03 / 1.03 |
+|  3 | 1.07 / 0.83 | 1.06 / 0.70 | 1.04 / 0.93 | 1.08 / 0.77 | 1.01 / 0.90 |
+|  4 | 1.05 / 0.79 | 1.01 / 0.70 | 0.97 / 0.81 | 1.00 / 0.74 | 0.96 / 0.79 |
+|  5 | 1.01 / 0.76 | 0.99 / 0.80 | 0.99 / 0.85 | 0.97 / 0.77 | 0.98 / 0.82 |
+|  6 | 1.02 / 0.81 | 1.00 / 0.82 | 1.01 / 0.87 | 0.98 / 0.77 | 0.97 / 0.82 |
+|  7 | 1.04 / 0.87 | 1.02 / 0.93 | 1.00 / 0.98 | 0.96 / 0.83 | 1.03 / 0.95 |
+|  8 | 1.07 / 0.96 | 1.02 / 0.97 | 0.97 / 0.94 | 0.96 / 0.85 | 1.00 / 0.97 |
+|  9 | 1.04 / 0.93 | 1.00 / 0.93 | 0.98 / 0.86 | 1.00 / 0.87 | 0.99 / 0.91 |
+| 10 | 1.02 / 0.92 | 1.01 / 0.88 | 1.06 / 0.86 | 0.99 / 0.92 | 1.00 / 0.92 |
+
+- Our AIFS ENS run reproduces ECMWF's spread within about 5 % on every day (day 10, 2 m
+  temperature: 2.82 K vs 2.76 K). This checks the AIFS ENS integration (member inputs, noise,
+  regridding). It is not bit-identical to ECMWF: the noise seeds differ.
+- The perturbation ensemble is 10-25 % too narrow from day 3 to day 10 for every variable.
+  Near the surface (10 m wind) it is 30-40 % too narrow in the first 4 days. Raising the
+  perturbation amplitudes helps the upper air but barely changes this: AIFS Single was trained
+  to minimise the mean squared error and damps small perturbations near the surface.
+- Over Germany alone the picture is the same (2 m temperature 0.64-0.89 for days 2-9).
+- `6-compare_spread.png` shows the same comparison for each cycle, without ECMWF's data, and
+  the `6-compare_<variable>.png` cards show both ensembles per city.
+
+### AIFS Single + perturbations
+
 AIFS Single is deterministic. `pipeline/ensemble.py` estimates forecast uncertainty by running
 the same model 51 times from slightly different initial conditions: member 0 is the unperturbed
 control, members 1-50 add smooth random perturbations (about 500 km scale) to the atmospheric
 fields, in +/- pairs. Amplitudes are about typical analysis errors (see the script header).
 
 ```bash
-.venv/bin/python pipeline/ensemble.py                  # latest cycle, 50 + 1 members, 240 h, Germany
+.venv/bin/python pipeline/ensemble.py                  # latest cycle, 50 + 1 members, 240 h, Europe
 .venv/bin/python pipeline/ensemble.py --members 10     # fewer members (must be even)
 ./predict_now.sh --ensemble-members 50                 # forecast, then ensemble, then cards
 ```
 
-- Runtime: about 50 s per member for 10 days on the RTX PRO 6000, so about 45 min for all 51.
+- Runtime: about 65 s per member for 10 days over Europe on the RTX PRO 6000, so about 58 min
+  for all 51.
   Do not run it while another forecast uses the GPU. A stopped run resumes and skips members
   that are already stored; `--force` starts again.
 - Storage: only the region is kept, `forecasts/<cycle>/ensemble/<region>/member_NNN.npz`
   (about 19 MB per member for Germany, roughly 1 GB in total), plus `meta.json` and `DONE`.
+  Europe (11,617 vs 1,020 grid points) takes about 220 MB per member, 11 GB per cycle and per
+  ensemble, so 22 GB with both. The model run itself is the same for any region.
   The full global output of 51 members would be about 117 GB.
 - Card integration is automatic: `predict_now.sh` (with `--ensemble auto`) uses every member
   that is stored, even from a run in progress (at least 3), so cards can be re-rendered while the
@@ -167,7 +240,7 @@ fields, in +/- pairs. Amplitudes are about typical analysis errors (see the scri
 - Be careful with the result. This is a simple initial-condition ensemble and not ECMWF's ENS
   (no singular vectors, no ensemble of data assimilations, no model-error perturbations).
   Probabilities are not calibrated.
-- One check against ECMWF's AIFS ENS (open data, cycle 2026-11-19 06Z, 50 perturbed members on
+- An earlier check, made with the first (untuned) perturbation amplitudes, against ECMWF's AIFS ENS (open data, cycle 2026-11-19 06Z, 50 perturbed members on
   each side, Germany box). The numbers are the ratio of our spread to ECMWF's spread. Spread is
   the area mean of the per-grid-point standard deviation over the members. A value of 1.00 means
   the same spread.
@@ -233,9 +306,24 @@ EOF
 | Machine | Device | 12 h test | 10-day forecast |
 |---------|--------|-----------|-----------------|
 | RTX PRO 6000 Blackwell (96 GB, sm_120) | `cuda` | 1 min 34 s end to end | **3 min 23 s** for `predict_now.sh` (default 240 h): forecast 2 min 41 s (≈ 1 min download/regrid/model load, ≈ 50 s for 40 steps at ≈ 1 s each after a ≈ 10 s warm-up, ≈ 50 s writing 2.3 GB of GRIB), then 42 s rendering 131 cards |
+| RTX 3090 (24 GB, sm_86) | `cuda` | 1 min 11 s end to end | **4 min 06 s** for `predict_now.sh` (default 240 h): forecast 3 min 18 s (36 s download/regrid, 4 s model load, 2 min 26 s for 40 steps at ≈ 2 s model time each plus GRIB writing, no noticeable warm-up), then 45 s rendering 131 Germany cards (41 s for Europe) |
 | 2× RTX 2080 (8 GB) + 16-core CPU | `cpu` | did not finish the first step in > 1 h | not practical |
 
-- **Use a GPU with ≥ 24 GB.** On CPU, the processor's sliding-window attention runs under
+Both GPU rows use the PyTorch attention shim (no flash-attn installed). The RTX 3090 timings
+were measured on 2026-11-19, cycle 12Z.
+
+- **RTX 3090 vs RTX PRO 6000:** each 6 h step takes about 2 s of model time instead of
+  about 1 s. End to end, `predict_now.sh` takes 4 min 06 s instead of 3 min 23 s, because
+  download, GRIB writing and rendering don't depend much on the GPU. A rerun of cycle
+  2026-11-19 00Z on the 3090 matched the RTX PRO 6000 output to rounding level after 12 h
+  (mean |diff|: 2 m temperature 0.02 K, MSL 1.5 Pa, z500 0.9 m²/s²).
+- **GPU memory:** with the defaults below, `nvidia-smi` showed at most **7.4 GB** in use on
+  the RTX 3090 during the 240 h run (about 7.3 GB throughout; this includes the CUDA context
+  and PyTorch's cached memory). The memory is set by the chunking, not by the GPU, so 16 GB
+  cards should be enough. They are untested, and `--device auto` only picks a GPU with
+  ≥ 20 GB free, so pass `--device cuda` on smaller cards. 24 GB leaves headroom for other
+  processes on the card.
+- **On CPU**, the processor's sliding-window attention runs under
   mixed-precision autocast and took about 400 s per layer in profiling, so a single 6 h step
   takes hours.
 - **flash-attn:** the checkpoint pickles a direct reference to

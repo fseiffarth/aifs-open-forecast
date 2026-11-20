@@ -4,11 +4,13 @@ Run ECMWF's machine-learned weather model **AIFS Single v2.0** from the latest r
 ECMWF open data, and turn the forecast into weather cards. One command does both:
 
 ```bash
-./predict_now.sh          # newest cycle → 10-day global forecast → weather cards for Germany
+./predict_now.sh          # newest cycle → 10-day global forecast → weather cards for Europe
 ```
 
-On a single RTX PRO 6000 (96 GB) the full 10-day forecast takes about **2 min 40 s**, and all
-131 cards take another 40 s. The optional 51-member ensemble (below) adds about 54 min.
+On a single RTX 3090 (24 GB) the full 10-day forecast takes about **3 min 20 s** and uses
+about 7.4 GB of GPU memory. On a single RTX PRO 6000 (96 GB) it takes about **2 min 40 s**, and all
+131 cards take another 40 s. The optional 51-member ensembles (below) add about 80 min
+(AIFS ENS) and 58 min (AIFS Single with perturbed initial conditions) for Europe.
 
 ## What it does
 
@@ -17,7 +19,7 @@ On a single RTX PRO 6000 (96 GB) the full 10-day forecast takes about **2 min 40
 2. Runs [`ecmwf/aifs-single-2.0`](https://huggingface.co/ecmwf/aifs-single-2.0) with
    [anemoi-inference](https://github.com/ecmwf/anemoi-inference) for 10 days in 6 h steps.
    The output is GRIB on the native N320 grid (~31 km).
-3. Renders weather cards for a region (Germany or Europe) and an `index.html` gallery that
+3. Renders weather cards for a region (Europe by default, or Germany) and an `index.html` gallery that
    links them all.
 
 ## Weather cards
@@ -67,18 +69,34 @@ how confident the forecast is. Without one, the cards look as before.
 
 ![Ensemble precipitation probability card](docs/example-precipitation-probability.png)
 
-The example cards above are from the 51-member ensemble of the 2026-11-19 06 UTC cycle. The
-bands widen from about day 5. Around day 10 the deterministic forecast (red line) sits at the
-cold edge of the band. ECMWF's own AIFS ENS shows the same thing for this cycle, so it is not
-an artefact of the perturbations.
+The example cards above are for Europe, from the 2026-11-19 12 UTC cycle with the 51-member AIFS
+ENS ensemble. The bands widen from about day 5, most in Berlin and Warsaw, where it turns cold. In
+the last days the deterministic forecast (red line) sits at the cold edge of the band in Berlin,
+Warsaw and Rome.
+
+**Two ensembles.** The pipeline can make the ensemble in two ways, and by default it runs both:
+
+- **AIFS ENS v2.0**, ECMWF's machine-learned ensemble model
+  ([`ecmwf/aifs-ens-2.0`](https://huggingface.co/ecmwf/aifs-ens-2.0)). Each member starts from
+  one of ECMWF's 50 perturbed initial states and the model adds its own trained noise. This is
+  what the cards show.
+- **AIFS Single + perturbations**: the deterministic model, run from the analysis plus our own
+  smooth random perturbations. A simple, transparent baseline.
+
+`6-compare_*.png` cards put both side by side for each city, and show their spread against lead
+time:
+
+![Ensemble spread comparison](docs/example-compare-spread.png)
+
+For the 2026-11-19 12 UTC cycle over Europe, our AIFS ENS run matched the spread of ECMWF's own
+AIFS ENS forecast within about 5 % on every day. The perturbation ensemble was 10-25 % too narrow
+from day 3 on, and 30-40 % too narrow for 10 m wind in the first days (details in
+INSTRUCTION.MD).
 
 A 10-90 % band is meant to hold the true weather about 8 times out of 10, if the ensemble is
-reliable. This one is not guaranteed to be. It is a simple initial-condition ensemble, not
-ECMWF's ENS. In one check against ECMWF's AIFS ENS, its spread over Germany was similar from
-about day 5 on, within about 10-20 %. In the first 3 days it is too small near the surface and too
-large at 500 hPa (see INSTRUCTION.MD). Other cases are not verified. Treat
-the percentages as relative confidence, not calibrated probabilities. The number of members
-used is printed in the subtitle.
+reliable. That needs verification against observations over many cycles, which this project has
+not done. Treat the percentages as relative confidence, not calibrated probabilities. The number
+of members used is printed in the subtitle.
 
 File names sort by group, for example `1-surface_2m-temperature.png` or
 `2-upper-air_temperature_0850hPa.png`. Cards are written to
@@ -92,8 +110,8 @@ cron and always keep the newest forecast.
 See **[INSTRUCTION.MD](INSTRUCTION.MD)**. It covers environment setup with the pinned package
 versions, the command-line options, cron, the output format, hardware notes and measured timings.
 
-You need Linux with Python 3.12 and, in practice, an NVIDIA GPU with at least 24 GB of
-memory. CPU inference works but is far too slow to be useful.
+You need Linux with Python 3.12 and, in practice, an NVIDIA GPU. 24 GB is tested; the forecast
+itself peaks at about 7.4 GB (see INSTRUCTION.MD). CPU inference works but is far too slow to be useful.
 
 ## Compatibility notes
 
@@ -130,7 +148,7 @@ The code in this repository is licensed under the [Apache License 2.0](LICENSE).
 
 The model and data are not part of this repository and carry their own licences:
 
-- AIFS Single v2.0 weights © ECMWF, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- AIFS Single v2.0 and AIFS ENS v2.0 weights © ECMWF, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - Forecast input: ECMWF open data, licensed under CC BY 4.0.
 - The example cards in `docs/` are derived from both. Contains modified ECMWF data and
   forecasts, © ECMWF, CC BY 4.0.

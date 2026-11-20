@@ -13,10 +13,12 @@ Runs ECMWF's AIFS Single v2.0 from the latest ECMWF open-data cycle
 ## Running
 
 - Setup: `./setup.sh [--cpu]` (anemoi-core, `.venv`, libgfortran; safe to re-run).
-- Full run: `./predict_now.sh` (latest cycle, 240 h, Germany). Use `--skip-forecast` to
+- Full run: `./predict_now.sh` (latest cycle, 240 h, Europe). Use `--skip-forecast` to
   re-render cards only.
 - Forecast only: `pipeline/run_forecast.sh [--lead-time 12h] [--device cuda]`.
 - Always use `.venv/bin/python`. System Python is 3.10 and lacks the dependencies.
+- AIFS ENS (`pipeline/ensemble.py --model ens`) runs in `.venv-ens` (`./setup.sh --ens`), which
+  pins newer anemoi packages than `.venv`. Don't install those pins into `.venv`.
 
 ## Conventions
 

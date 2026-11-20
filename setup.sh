@@ -9,13 +9,15 @@ cd "$ROOT"
 ANEMOI_CORE_URL="https://github.com/ecmwf/anemoi-core.git"
 ANEMOI_CORE_TAG="models-0.9.3"
 TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+WITH_ENS=0
 
 usage() {
     cat <<EOF
-Usage: ./setup.sh [--cpu] [--torch-index URL]
+Usage: ./setup.sh [--cpu] [--torch-index URL] [--ens]
 
   --cpu              Install the CPU-only torch wheel (no CUDA)
   --torch-index URL  PyTorch wheel index (default: $TORCH_INDEX)
+  --ens              Also create .venv-ens for AIFS ENS v2.0 (pipeline/ensemble.py --model ens)
 
 Caches go to .cache/ in the repo unless UV_CACHE_DIR / CONDA_PKGS_DIRS are set.
 EOF
@@ -25,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --cpu) TORCH_INDEX="https://download.pytorch.org/whl/cpu" ;;
         --torch-index) TORCH_INDEX="${2:?--torch-index needs a URL}"; shift ;;
+        --ens) WITH_ENS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -93,6 +96,24 @@ else
     [[ -d .sysdeps/conda-meta ]] || conda create -y -p .sysdeps -c conda-forge --override-channels libgfortran5
     mkdir -p .sysdeps/runtime
     ln -sf ../lib/libgfortran.so.5 ../lib/libquadmath.so.0 .sysdeps/runtime/
+fi
+
+# 4. Optional: AIFS ENS v2.0 pins newer anemoi-models/anemoi-graphs than AIFS Single
+#    (models/aifs-ens-2.0/pyproject.toml), so it gets its own venv. Everything else is the same.
+if [[ "$WITH_ENS" == 1 ]]; then
+    PY_ENS="$ROOT/.venv-ens/bin/python"
+    if [[ ! -x "$PY_ENS" ]]; then
+        log "creating .venv-ens (Python 3.12) for AIFS ENS"
+        uv venv --clear -p 3.12 .venv-ens
+    fi
+    uv pip install --python "$PY_ENS" "${TORCH_PINS[@]}" --index-url "$TORCH_INDEX"
+    uv pip install --python "$PY_ENS" "${TORCH_PINS[@]}" \
+        anemoi-models==0.11.2 anemoi-graphs==0.8.1 \
+        "anemoi-inference[huggingface]==0.8.3" "anemoi-plugins-ecmwf-inference[opendata]==0.2.1" \
+        anemoi-transform==0.1.16.post2 anemoi-utils==0.4.35.post3 torch-geometric==2.6.1 \
+        earthkit-regrid==0.5.1 ecmwf-opendata==0.3.29 "earthkit-data<1" "earthkit-plots<1" \
+        numpy==1.26.4 scipy pyyaml
+    "$PY_ENS" -W ignore -c "import anemoi.models; print('.venv-ens: anemoi-models', anemoi.models.__version__)"
 fi
 
 log "checking imports"

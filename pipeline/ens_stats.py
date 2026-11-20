@@ -26,6 +26,15 @@ def anemoi_name(param: str, levtype: str, level) -> str:
     return GRIB_TO_ANEMOI.get(param, param)
 
 
+ENSEMBLE_SUBDIR = {"single": "ensemble", "ens": "ensemble-aifs-ens"}
+
+
+def ensemble_dir(cycle_dir: Path, region: str, model: str = "single") -> Path:
+    """Where ensemble.py stores the members: <cycle>/ensemble/<region> (AIFS Single with
+    perturbed initial conditions) or <cycle>/ensemble-aifs-ens/<region> (AIFS ENS)."""
+    return Path(cycle_dir) / ENSEMBLE_SUBDIR[model] / region
+
+
 def member_files(ens_dir: Path) -> list[Path]:
     """Finished member files (half-written '.tmp.npz' files are ignored)."""
     return sorted(p for p in Path(ens_dir).glob("member_*.npz") if ".tmp" not in p.name)
