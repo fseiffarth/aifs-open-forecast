@@ -12,6 +12,7 @@ Runs ECMWF's AIFS Single v2.0 from the latest ECMWF open-data cycle
 
 ## Running
 
+- Setup: `./setup.sh [--cpu]` (anemoi-core, `.venv`, libgfortran; safe to re-run).
 - Full run: `./predict_now.sh` (latest cycle, 240 h, Germany). Use `--skip-forecast` to
   re-render cards only.
 - Forecast only: `pipeline/run_forecast.sh [--lead-time 12h] [--device cuda]`.
